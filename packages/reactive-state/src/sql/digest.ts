@@ -54,11 +54,12 @@ export interface Queryable {
  * number, and of a unique index its table, name, columns, classes, collations, `indimmediate`,
  * `indisvalid` and the hashes of its predicate and expressions (of the application's relations, and
  * of a temporary one that shadows an application's, for which they are what the late flags stand
- * for); of a constraint its table or domain, kind and the hash of its definition; of a rule the
- * hashes of its action and condition; of a function and of a type its row but its ACL, and whether
- * the session's role may run or use it; of a schema its name and whether the session's role may use
- * it; of each followed table the file its rows are in; and of the session its `current_user`,
- * `session_user`, search path and the settings a plan folds into its constants.
+ * for), and of an inheritance of the application's whether its detach is left pending besides; of a
+ * constraint its table or domain, kind and the hash of its definition; of a rule the hashes of its
+ * action and condition; of a function and of a type its row but its ACL, and whether the session's
+ * role may run or use it; of a schema its name and whether the session's role may use it; of each
+ * followed table the file its rows are in; and of the session its `current_user`, `session_user`,
+ * search path and the settings a plan folds into its constants.
  * What a result can depend on besides, that is in no row the digest reads, is six things, and each
  * is for a reason that is no size of the change:
  *
@@ -119,12 +120,12 @@ function hashed(expression: string): string {
  * role's changes it not.
  */
 function definedOf(row: string, rights: string): string {
-  return hashed(`(to_jsonb(${row}) - ${literal(rights)})::text`);
+  return hashed(`(to_jsonb(${row}) - ${literal(rights)})::pg_catalog.text`);
 }
 
 /** The digest of the rows of `catalog` whose `column` is `oid`, in their order of `order`. */
 function rowsOf(catalog: string, column: string, oid: string, order: string): string {
-  const rows = hashed(`coalesce(string_agg(r::text, ',' ORDER BY ${order}), '')`);
+  const rows = hashed(`coalesce(string_agg(r::pg_catalog.text, ',' ORDER BY ${order}), '')`);
   return `(SELECT ${rows} FROM ${catalog} AS r WHERE r.${column} = ${oid})`;
 }
 
@@ -158,7 +159,7 @@ function mayRead(): string {
 function memberships(): string {
   const roles = `(SELECT string_agg(concat_ws('.', g.oid, quote_ident(g.rolname), pg_has_role(s.oid, g.oid, 'USAGE')), ',' ORDER BY g.oid) FROM pg_roles AS g WHERE pg_has_role(s.oid, g.oid, 'MEMBER'))`;
   const grants = hashed(
-    "coalesce(string_agg(m::text, ',' ORDER BY m.roleid, m.member, m.grantor), '')",
+    "coalesce(string_agg(m::pg_catalog.text, ',' ORDER BY m.roleid, m.member, m.grantor), '')",
   );
   return `CASE WHEN s.rolsuper THEN '' ELSE concat_ws(':', ${roles}, (SELECT ${grants} FROM pg_auth_members AS m WHERE pg_has_role(s.oid, m.member, 'MEMBER'))) END`;
 }
@@ -170,7 +171,7 @@ function memberships(): string {
  * and the four flags the manual documents as "has, or once had", which `VACUUM` and `ANALYZE` clear
  * late (an index, a rule, a trigger, a child): a flag that is cleared late says nothing a statement
  * can tell. What each stands for is held where it matters — a view's rule by its `pg_rewrite` row, a
- * unique index and a child of a temporary relation by their own rows (`temporaryParts`), and an
+ * unique index and a child of a temporary relation by their own rows (`sessionParts`), and an
  * index that is no unique one, and a trigger, change no row a statement reads. Measured on a
  * temporary table through each of those commands, the first seven are every column of the row that
  * a write or a maintenance moved besides the four flags, and a view's row moved by none.
@@ -198,12 +199,12 @@ const MAINTAINED_ATTRIBUTE_COLUMNS = ['atthasmissing', 'attmissingval'];
 
 /** `columns` as the text array of a literal, to take from a row's JSON. */
 function withoutColumns(columns: readonly string[]): string {
-  return `ARRAY[${columns.map((column) => literal(column)).join(', ')}]::text[]`;
+  return `ARRAY[${columns.map((column) => literal(column)).join(', ')}]::pg_catalog.text[]`;
 }
 
 /** The digest of the `pg_attribute` rows of the relation `oid`, whole but for what upkeep moves. */
 function attributesOf(oid: string): string {
-  const row = `(to_jsonb(r) - ${withoutColumns(MAINTAINED_ATTRIBUTE_COLUMNS)})::text`;
+  const row = `(to_jsonb(r) - ${withoutColumns(MAINTAINED_ATTRIBUTE_COLUMNS)})::pg_catalog.text`;
   const rows = hashed(`coalesce(string_agg(${row}, ',' ORDER BY r.attnum), '')`);
   return `(SELECT ${rows} FROM pg_attribute AS r WHERE r.attrelid = ${oid})`;
 }
@@ -218,7 +219,9 @@ function attributesOf(oid: string): string {
  * by the roles it is a member of is held by the readers' own rows.
  */
 function temporaryRelation(alias: string): string {
-  const row = hashed(`(to_jsonb(${alias}) - ${withoutColumns(MAINTAINED_CLASS_COLUMNS)})::text`);
+  const row = hashed(
+    `(to_jsonb(${alias}) - ${withoutColumns(MAINTAINED_CLASS_COLUMNS)})::pg_catalog.text`,
+  );
   const oid = `${alias}.oid`;
   return `${row}, ${attributesOf(oid)}`;
 }
@@ -238,7 +241,7 @@ function shadowing(own: string): string {
  * names the row: of the application's relations, or of a temporary one.
  */
 function uniqueIndexRow(tag: string): string {
-  return `concat_ws(':', '${tag}', x.indrelid, ci.relname, x.indkey::text, x.indclass::text, x.indcollation::text, x.indimmediate, x.indisvalid, ${hashed("coalesce(pg_get_expr(x.indpred, x.indrelid), '')")}, ${hashed("coalesce(pg_get_expr(x.indexprs, x.indrelid), '')")})`;
+  return `concat_ws(':', '${tag}', x.indrelid, ci.relname, x.indkey::pg_catalog.text, x.indclass::pg_catalog.text, x.indcollation::pg_catalog.text, x.indimmediate, x.indisvalid, ${hashed("coalesce(pg_get_expr(x.indpred, x.indrelid), '')")}, ${hashed("coalesce(pg_get_expr(x.indexprs, x.indrelid), '')")})`;
 }
 
 /** What the catalog defines of the application's relations: `own` says which schemas are its. */
@@ -249,8 +252,8 @@ function relationParts(own: string): readonly string[] {
     // An index's own relation is of no digest: what a unique one says is (`u`). Of each other, what
     // each role a statement reads as may read of it, which a statement that reads it fails without;
     // and of a column, the rights granted of it alone, to any role.
-    `SELECT concat_ws(':', 'c', c.oid, n.nspname, c.relname, c.relkind, c.relowner, c.relrowsecurity, c.relforcerowsecurity, c.relispartition, c.reloptions::text, ${mayRead()}) AS x FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE ${own} AND c.relkind NOT IN ('i', 'I')`,
-    `SELECT concat_ws(':', 'a', a.attrelid, a.attnum, a.attname, a.atttypid, a.atttypmod, a.attcollation, a.attnotnull, a.attisdropped, a.attgenerated, a.attacl::text) FROM pg_attribute AS a ${related('a.attrelid')} AND a.attnum > 0 AND c.relkind NOT IN ('i', 'I')`,
+    `SELECT concat_ws(':', 'c', c.oid, n.nspname, c.relname, c.relkind, c.relowner, c.relrowsecurity, c.relforcerowsecurity, c.relispartition, c.reloptions::pg_catalog.text, ${mayRead()}) AS x FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE ${own} AND c.relkind NOT IN ('i', 'I')`,
+    `SELECT concat_ws(':', 'a', a.attrelid, a.attnum, a.attname, a.atttypid, a.atttypmod, a.attcollation, a.attnotnull, a.attisdropped, a.attgenerated, a.attacl::pg_catalog.text) FROM pg_attribute AS a ${related('a.attrelid')} AND a.attnum > 0 AND c.relkind NOT IN ('i', 'I')`,
     // A column's default and a generated column's expression: one set again rewrites its rows.
     `SELECT concat_ws(':', 'd', d.adrelid, d.adnum, ${hashed('pg_get_expr(d.adbin, d.adrelid)')}) FROM pg_attrdef AS d ${related('d.adrelid')}`,
     // A table that inherits from one of the application's — a temporary one too — whose rows a
@@ -260,8 +263,8 @@ function relationParts(own: string): readonly string[] {
     `SELECT concat_ws(':', 'k', k.oid, k.conrelid, k.contype, ${hashed('pg_get_constraintdef(k.oid)')}) FROM pg_constraint AS k ${related('k.conrelid')}`,
     // A unique index (`uniqueIndexRow`).
     `SELECT ${uniqueIndexRow('u')} FROM pg_index AS x JOIN pg_class AS ci ON ci.oid = x.indexrelid ${related('x.indrelid')} AND x.indisunique`,
-    `SELECT concat_ws(':', 'r', r.oid, ${hashed('r.ev_action::text')}, ${hashed("coalesce(r.ev_qual::text, '')")}) FROM pg_rewrite AS r ${related('r.ev_class')}`,
-    `SELECT concat_ws(':', 'p', p.oid, ${hashed('p::text')}) FROM pg_policy AS p`,
+    `SELECT concat_ws(':', 'r', r.oid, ${hashed('r.ev_action::pg_catalog.text')}, ${hashed("coalesce(r.ev_qual::pg_catalog.text, '')")}) FROM pg_rewrite AS r ${related('r.ev_class')}`,
+    `SELECT concat_ws(':', 'p', p.oid, ${hashed('p::pg_catalog.text')}) FROM pg_policy AS p`,
   ];
 }
 
@@ -273,24 +276,24 @@ function definitionParts(own: string): readonly string[] {
   return [
     `SELECT concat_ws(':', 'f', p.oid, ${definedOf('p', 'proacl')}, has_function_privilege(p.oid, 'EXECUTE')) FROM pg_proc AS p ${of('p.pronamespace')}`,
     // An aggregate's functions and first state, which `CREATE OR REPLACE AGGREGATE` sets again.
-    `SELECT concat_ws(':', 'g', g.aggfnoid, ${hashed('g::text')}) FROM pg_aggregate AS g JOIN pg_proc AS p ON p.oid = g.aggfnoid ${of('p.pronamespace')}`,
+    `SELECT concat_ws(':', 'g', g.aggfnoid, ${hashed('g::pg_catalog.text')}) FROM pg_aggregate AS g JOIN pg_proc AS p ON p.oid = g.aggfnoid ${of('p.pronamespace')}`,
     `SELECT concat_ws(':', 't', t.oid, ${definedOf('t', 'typacl')}, has_type_privilege(t.oid, 'USAGE')) FROM pg_type AS t ${ofType}`,
-    `SELECT concat_ws(':', 'e', e.oid, ${hashed('e::text')}) FROM pg_enum AS e JOIN pg_type AS t ON t.oid = e.enumtypid ${ofType}`,
+    `SELECT concat_ws(':', 'e', e.oid, ${hashed('e::pg_catalog.text')}) FROM pg_enum AS e JOIN pg_type AS t ON t.oid = e.enumtypid ${ofType}`,
     // A domain's constraints, which its type's own row says nothing of.
     `SELECT concat_ws(':', 'kd', k.oid, k.contypid, ${hashed('pg_get_constraintdef(k.oid)')}) FROM pg_constraint AS k JOIN pg_type AS t ON t.oid = k.contypid ${ofType}`,
-    `SELECT concat_ws(':', 'o', o.oid, ${hashed('o::text')}) FROM pg_operator AS o ${of('o.oprnamespace')}`,
+    `SELECT concat_ws(':', 'o', o.oid, ${hashed('o::pg_catalog.text')}) FROM pg_operator AS o ${of('o.oprnamespace')}`,
     // An operator class and family: what an index's and a sort's comparisons are.
-    `SELECT concat_ws(':', 'q', q.oid, ${hashed('q::text')}) FROM pg_opclass AS q ${of('q.opcnamespace')}`,
-    `SELECT concat_ws(':', 'h', h.oid, ${hashed('h::text')}, ${rowsOf('pg_amop', 'amopfamily', 'h.oid', 'r.oid')}, ${rowsOf('pg_amproc', 'amprocfamily', 'h.oid', 'r.oid')}) FROM pg_opfamily AS h ${of('h.opfnamespace')}`,
-    `SELECT concat_ws(':', 'l', l.oid, ${hashed('l::text')}) FROM pg_collation AS l ${of('l.collnamespace')}`,
+    `SELECT concat_ws(':', 'q', q.oid, ${hashed('q::pg_catalog.text')}) FROM pg_opclass AS q ${of('q.opcnamespace')}`,
+    `SELECT concat_ws(':', 'h', h.oid, ${hashed('h::pg_catalog.text')}, ${rowsOf('pg_amop', 'amopfamily', 'h.oid', 'r.oid')}, ${rowsOf('pg_amproc', 'amprocfamily', 'h.oid', 'r.oid')}) FROM pg_opfamily AS h ${of('h.opfnamespace')}`,
+    `SELECT concat_ws(':', 'l', l.oid, ${hashed('l::pg_catalog.text')}) FROM pg_collation AS l ${of('l.collnamespace')}`,
     // The casts of the application's: PostgreSQL's own are numbered below its first free oid.
-    `SELECT concat_ws(':', 'x', x.oid, ${hashed('x::text')}) FROM pg_cast AS x WHERE x.oid >= ${String(FIRST_NORMAL_OID)}`,
+    `SELECT concat_ws(':', 'x', x.oid, ${hashed('x::pg_catalog.text')}) FROM pg_cast AS x WHERE x.oid >= ${String(FIRST_NORMAL_OID)}`,
     // Text search: a configuration and the dictionaries it maps each kind of token to, a
     // dictionary's options, a parser and a template.
-    `SELECT concat_ws(':', 'y', y.oid, ${hashed('y::text')}, ${rowsOf('pg_ts_config_map', 'mapcfg', 'y.oid', 'r.maptokentype, r.mapseqno')}) FROM pg_ts_config AS y ${of('y.cfgnamespace')}`,
-    `SELECT concat_ws(':', 'b', b.oid, ${hashed('b::text')}) FROM pg_ts_dict AS b ${of('b.dictnamespace')}`,
-    `SELECT concat_ws(':', 'z', z.oid, ${hashed('z::text')}) FROM pg_ts_parser AS z ${of('z.prsnamespace')}`,
-    `SELECT concat_ws(':', 'j', j.oid, ${hashed('j::text')}) FROM pg_ts_template AS j ${of('j.tmplnamespace')}`,
+    `SELECT concat_ws(':', 'y', y.oid, ${hashed('y::pg_catalog.text')}, ${rowsOf('pg_ts_config_map', 'mapcfg', 'y.oid', 'r.maptokentype, r.mapseqno')}) FROM pg_ts_config AS y ${of('y.cfgnamespace')}`,
+    `SELECT concat_ws(':', 'b', b.oid, ${hashed('b::pg_catalog.text')}) FROM pg_ts_dict AS b ${of('b.dictnamespace')}`,
+    `SELECT concat_ws(':', 'z', z.oid, ${hashed('z::pg_catalog.text')}) FROM pg_ts_parser AS z ${of('z.prsnamespace')}`,
+    `SELECT concat_ws(':', 'j', j.oid, ${hashed('j::pg_catalog.text')}) FROM pg_ts_template AS j ${of('j.tmplnamespace')}`,
   ];
 }
 
@@ -307,7 +310,7 @@ function sessionParts(own: string, relations: readonly Relation[]): readonly str
     // and a text search object of it, each by its whole row: a temporary table a plan names is one
     // nothing follows, a fault of the render once a plan is asked again. A change of any of them, of
     // the right of any role to it included, moves the digest, whether the role reads or not.
-    `SELECT concat_ws(':', 'v', c.oid, ${temporaryRelation('c')}, ${hashed('r::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'v', c.oid, ${temporaryRelation('c')}, ${hashed('r::pg_catalog.text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'm', t.oid, ${temporaryRelation('t')}) FROM pg_class AS t WHERE ${shadowing(own)}`,
     // What a plan tells of such a relation besides, which the flags of its row (`relhasindex`,
     // `relhassubclass`) say late and say of any index: a unique index, by which the plan leaves out
@@ -319,14 +322,14 @@ function sessionParts(own: string, relations: readonly Relation[]): readonly str
     // first, and every one a statement names as `pg_temp`'s — but a table's row type and an array,
     // unless an object a statement names is of it or of its array (a domain over it, a function's
     // result).
-    `SELECT concat_ws(':', 'tt', t.oid, t.typname, ${hashed('t::text')}, ${rowsOf('pg_constraint', 'contypid', 't.oid', 'r.oid')}, ${rowsOf('pg_enum', 'enumtypid', 't.oid', 'r.enumsortorder')}, ${attributesOf('t.typrelid')}) FROM pg_type AS t LEFT JOIN pg_class AS k ON k.oid = t.typrelid WHERE t.typnamespace = pg_my_temp_schema() AND (t.typname IN (SELECT o.typname FROM pg_type AS o JOIN pg_namespace AS n ON n.oid = o.typnamespace WHERE ${own}) OR (t.typelem = 0 AND (t.typrelid = 0 OR k.relkind = 'c')) OR EXISTS (SELECT 1 FROM pg_depend AS p WHERE p.refclassid = 'pg_type'::regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n'))`,
-    `SELECT concat_ws(':', 'tf', p.oid, ${hashed('p::text')}) FROM pg_proc AS p WHERE p.pronamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'to', o.oid, ${hashed('o::text')}) FROM pg_operator AS o WHERE o.oprnamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'tl', l.oid, ${hashed('l::text')}) FROM pg_collation AS l WHERE l.collnamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'ty', y.oid, ${hashed('y::text')}, ${rowsOf('pg_ts_config_map', 'mapcfg', 'y.oid', 'r.maptokentype, r.mapseqno')}) FROM pg_ts_config AS y WHERE y.cfgnamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'tb', b.oid, ${hashed('b::text')}) FROM pg_ts_dict AS b WHERE b.dictnamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'tz', z.oid, ${hashed('z::text')}) FROM pg_ts_parser AS z WHERE z.prsnamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'tj', j.oid, ${hashed('j::text')}) FROM pg_ts_template AS j WHERE j.tmplnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'tt', t.oid, t.typname, ${hashed('t::pg_catalog.text')}, ${rowsOf('pg_constraint', 'contypid', 't.oid', 'r.oid')}, ${rowsOf('pg_enum', 'enumtypid', 't.oid', 'r.enumsortorder')}, ${attributesOf('t.typrelid')}) FROM pg_type AS t LEFT JOIN pg_class AS k ON k.oid = t.typrelid WHERE t.typnamespace = pg_my_temp_schema() AND (t.typname IN (SELECT o.typname FROM pg_type AS o JOIN pg_namespace AS n ON n.oid = o.typnamespace WHERE n.nspname = 'pg_catalog' OR ${own}) OR (t.typelem = 0 AND (t.typrelid = 0 OR k.relkind = 'c')) OR EXISTS (SELECT 1 FROM pg_depend AS p WHERE p.refclassid = 'pg_type'::pg_catalog.regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n'))`,
+    `SELECT concat_ws(':', 'tf', p.oid, ${hashed('p::pg_catalog.text')}) FROM pg_proc AS p WHERE p.pronamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'to', o.oid, ${hashed('o::pg_catalog.text')}) FROM pg_operator AS o WHERE o.oprnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'tl', l.oid, ${hashed('l::pg_catalog.text')}) FROM pg_collation AS l WHERE l.collnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'ty', y.oid, ${hashed('y::pg_catalog.text')}, ${rowsOf('pg_ts_config_map', 'mapcfg', 'y.oid', 'r.maptokentype, r.mapseqno')}) FROM pg_ts_config AS y WHERE y.cfgnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'tb', b.oid, ${hashed('b::pg_catalog.text')}) FROM pg_ts_dict AS b WHERE b.dictnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'tz', z.oid, ${hashed('z::pg_catalog.text')}) FROM pg_ts_parser AS z WHERE z.prsnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'tj', j.oid, ${hashed('j::pg_catalog.text')}) FROM pg_ts_template AS j WHERE j.tmplnamespace = pg_my_temp_schema()`,
     // The file a followed table's rows are in: a command that rewrites them of no other definition —
     // a column's type set to its own `USING` an expression — makes another, which a session that
     // fires no event trigger (`event_triggers`) is counted of by nothing else; so does a
@@ -337,7 +340,7 @@ function sessionParts(own: string, relations: readonly Relation[]): readonly str
     // settings; the password is masked there), and its memberships (`memberships`): a policy's `TO`
     // names a role by its oid, `pg_has_role(current_user, 'admins', 'member')` asks of a name, and a
     // role renamed to the name a policy asks of is another role.
-    `SELECT concat_ws(':', 'role', s.oid, ${hashed('s::text')}, ${memberships()}) FROM pg_roles AS s WHERE s.oid IN (SELECT r.oid FROM "readers" AS r)`,
+    `SELECT concat_ws(':', 'role', s.oid, ${hashed('s::pg_catalog.text')}, ${memberships()}) FROM pg_roles AS s WHERE s.oid IN (SELECT r.oid FROM "readers" AS r)`,
     // The role the session reads as and the one it logged in as, by name, which a policy may name
     // (`current_user`, `session_user`): the rows a statement reads differ with them where no right
     // does, as the readers' rights say nothing of which of them reads; quoted, so that no two pairs
@@ -348,7 +351,7 @@ function sessionParts(own: string, relations: readonly Relation[]): readonly str
     // `bytea_output`), a date's, a time's, an interval's or an array's constant as its text is read
     // (`DateStyle`, `TimeZone`, `timezone_abbreviations`, `IntervalStyle`, `array_nulls`), and
     // `= NULL` read as `IS NULL` (`transform_null_equals`).
-    `SELECT concat_ws(':', 's', quote_ident(current_user), quote_ident(session_user), current_setting('search_path'), current_schemas(false)::text, current_setting('row_security'), current_setting('standard_conforming_strings'), current_setting('extra_float_digits'), current_setting('bytea_output'), current_setting('DateStyle'), current_setting('TimeZone'), current_setting('timezone_abbreviations'), current_setting('IntervalStyle'), current_setting('array_nulls'), current_setting('transform_null_equals'))`,
+    `SELECT concat_ws(':', 's', quote_ident(current_user), quote_ident(session_user), current_setting('search_path'), current_schemas(false)::pg_catalog.text, current_setting('row_security'), current_setting('standard_conforming_strings'), current_setting('extra_float_digits'), current_setting('bytea_output'), current_setting('DateStyle'), current_setting('TimeZone'), current_setting('timezone_abbreviations'), current_setting('IntervalStyle'), current_setting('array_nulls'), current_setting('transform_null_equals'))`,
   ];
 }
 

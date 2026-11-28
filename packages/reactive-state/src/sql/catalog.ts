@@ -1,6 +1,8 @@
-import { relationKey } from './capture.ts';
+import { LOG_SQL_FUNCTIONS, relationKey } from './capture.ts';
+import { namesTemporaryRowType, type TemporaryRowType } from './guards.ts';
 import type { Followed, KeyKind } from './keys.ts';
 import { renamesColumns } from './renames.ts';
+import { type KnownType, type TypeKeywords, unknownTypeCast } from './type-guards.ts';
 
 /**
  * What the database itself says of the followed tables, asked once a connection — with the first
@@ -18,6 +20,12 @@ import { renamesColumns } from './renames.ts';
 /** The first PostgreSQL that writes a subquery's value as `(InitPlan n)`, never as a `$n` of its own. */
 const CONDITIONS_SINCE = 170_000;
 
+/** The name a statement gives the session's temporary schema, whatever its own name is. */
+const TEMPORARY_SCHEMA = 'pg_temp';
+
+/** The kinds of relation whose row type a statement may name: a table's, a view's and kin. */
+const RELATION_KINDS: ReadonlySet<string> = new Set(['f', 'm', 'p', 'r', 'v']);
+
 /** The types a key of each kind may be, as PostgreSQL names them; of text, an enum's too. */
 const TYPES: Readonly<Record<KeyKind, ReadonlySet<string>>> = {
   boolean: new Set(['bool']),
@@ -33,6 +41,16 @@ const EQUALS_TYPES = ['bool', 'bpchar', 'int2', 'int4', 'int8', 'name', 'text', 
 
 /** What the catalog says the followed tables' conditions may be followed by. */
 export interface Catalog {
+  /** Relations whose statement triggers cannot capture every write a scan can observe. */
+  readonly unsupported?: ReadonlySet<string>;
+  /** Temporary table row types whose changes nothing counts: a staging table's, as its DDL is not. */
+  readonly temporaryTypes?: readonly TemporaryRowType[];
+  /** Whether a known string-body SQL function names a temporary table row type. */
+  readonly temporaryBody?: boolean;
+  /** Permanent type identities an explicit cast or typed literal may use. */
+  readonly castTypes?: readonly KnownType[];
+  /** The server's keyword categories: proof of syntax words and unquoted column identifiers. */
+  readonly typeKeywords?: TypeKeywords | undefined;
   /** Of each followed table, by its declared name, the key columns its conditions are followed by. */
   readonly keys: ReadonlyMap<string, ReadonlySet<string>>;
   /** Of each followed table, the type PostgreSQL names each of those keys by (`status`, `text`). */
@@ -51,20 +69,6 @@ export interface Catalog {
    * other tables too, which the policy's own conditions — of the role that reads — may scan.
    */
   readonly hidden: ReadonlySet<string>;
-  /**
-   * The partitioned tables and the partitions among the followed tables, and the partitions of a
-   * followed partitioned table, by `relationKey`: a plan names a partitioned table's partitions, and
-   * a write to the table is logged as the table's, so nothing follows either. Not known, as of no
-   * catalog, is none.
-   */
-  readonly partitioned?: ReadonlySet<string>;
-  /**
-   * The followed tables that inherit from another table (`INHERITS`), and those that inherit from
-   * them, by `relationKey` — partitions are `partitioned`'s: a write through a table's parent
-   * changes its rows and is logged as the parent's, which a render that read the table alone is not
-   * told of. Not known, as of no catalog, is none.
-   */
-  readonly inherited?: ReadonlySet<string>;
 }
 
 /** No condition followed: every read of a table is of the table whole. */
@@ -81,10 +85,9 @@ function literal(text: string): string {
 
 /**
  * The statement that asks of the followed tables of `followed`: the server's version, and of each
- * table, by its schema and name, its kind, whether it is a partition, inherits from another table
- * or its rows are hidden by a policy, and of each column, its type, the kind of type, and whether
- * its collation is deterministic. The tables that inherit from a followed table, partitions
- * included, are asked of the same way.
+ * table, by its schema and name, its kind, whether it is a partition or its rows are hidden by a
+ * policy, and of each column, its type, the kind of type, and whether its collation is
+ * deterministic.
  */
 export function catalogSql(followed: Followed): string {
   const relations = followed.relations.map(
@@ -94,7 +97,7 @@ export function catalogSql(followed: Followed): string {
   const nondeterministic =
     'EXISTS (SELECT 1 FROM pg_collation AS x WHERE NOT x.collisdeterministic)';
   const deterministic = `a.attcollation = 0 OR (coalesce(co.collisdeterministic, true) AND NOT ${nondeterministic})`;
-  const columns = `(SELECT coalesce(json_agg(json_build_object('name', a.attname, 'type', t.typname, 'type_schema', tn.nspname, 'category', t.typtype, 'oid', t.oid::bigint, 'builtin', t.typnamespace = 'pg_catalog'::regnamespace, 'deterministic', ${deterministic})), '[]'::json) FROM pg_attribute AS a JOIN pg_type AS t ON t.oid = a.atttypid JOIN pg_namespace AS tn ON tn.oid = t.typnamespace LEFT JOIN pg_collation AS co ON co.oid = a.attcollation WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)`;
+  const columns = `(SELECT coalesce(json_agg(json_build_object('name', a.attname, 'type', t.typname, 'type_schema', tn.nspname, 'category', t.typtype, 'oid', t.oid::pg_catalog.int8, 'builtin', t.typnamespace = 'pg_catalog'::pg_catalog.regnamespace, 'visible', pg_type_is_visible(t.oid), 'deterministic', ${deterministic})), '[]'::pg_catalog.json) FROM pg_attribute AS a JOIN pg_type AS t ON t.oid = a.atttypid JOIN pg_namespace AS tn ON tn.oid = t.typnamespace LEFT JOIN pg_collation AS co ON co.oid = a.attcollation WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)`;
   // An `=` of the application's of a type a key may be — one PostgreSQL may resolve before
   // its own, as the search path orders them — compares otherwise than the key's text does.
   const operators = `EXISTS (SELECT 1 FROM pg_operator AS o JOIN pg_namespace AS n ON n.oid = o.oprnamespace JOIN pg_type AS l ON l.oid = o.oprleft JOIN pg_type AS r ON r.oid = o.oprright WHERE o.oprname = '=' AND n.nspname <> 'pg_catalog' AND (l.typtype IN ('e', 'p') OR r.typtype IN ('e', 'p') OR l.typname IN (${EQUALS_TYPES}) OR r.typname IN (${EQUALS_TYPES})))`;
@@ -107,15 +110,41 @@ export function catalogSql(followed: Followed): string {
   // The application's trees first, then the pattern of them alone: PostgreSQL would else match the
   // pattern within its scan of every rule, its own views' too, before it leaves those out (some
   // 40 ms of a PGlite's 3 MB of them, on a first plan).
-  const kept = `SELECT r.ev_action::text AS tree FROM pg_rewrite AS r JOIN pg_class AS c ON c.oid = r.ev_class JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND ${others} UNION ALL SELECT p.prosqlbody::text FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE p.prosqlbody IS NOT NULL AND ${others}`;
-  const trees = `(WITH "kept" AS MATERIALIZED (${kept}) SELECT coalesce(json_agg(k.tree), '[]'::json) FROM "kept" AS k WHERE k.tree ~ ${aliasList})`;
-  const bodies = `(SELECT coalesce(json_agg(p.prosrc), '[]'::json) FROM pg_proc AS p JOIN pg_language AS l ON l.oid = p.prolang JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE l.lanname = 'sql' AND p.prosqlbody IS NULL AND ${others})`;
-  // The tables, at any depth, that inherit from a followed table, its partitions among them
-  // (`pg_inherits` holds both): a plan of a table names them, and a plan of a partitioned table
-  // names them alone.
-  const descendantsOfListed = `WITH RECURSIVE "tree"("oid") AS (SELECT p.oid FROM pg_class AS p JOIN pg_namespace AS pn ON pn.oid = p.relnamespace WHERE (pn.nspname, p.relname) IN (${listed}) UNION SELECT i.inhrelid FROM pg_inherits AS i JOIN "tree" AS t ON i.inhparent = t."oid") SELECT "oid" FROM "tree"`;
-  const inherits = `EXISTS (SELECT 1 FROM pg_inherits AS h WHERE h.inhrelid = c.oid)`;
-  return `SELECT current_setting('server_version_num')::int AS "version", current_setting('standard_conforming_strings') = 'on' AS "conforming", getdatabaseencoding() = 'UTF8' AS "utf8", ${operators} AS "operators", ${trees} AS "trees", ${bodies} AS "bodies", coalesce((SELECT json_agg(json_build_object('schema', n.nspname, 'name', c.relname, 'kind', c.relkind, 'partition', c.relispartition, 'inherits', ${inherits}, 'hidden', c.relrowsecurity, 'columns', ${columns})) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (${listed}) OR c.oid IN (${descendantsOfListed})), '[]'::json) AS "tables"`;
+  const kept = `SELECT r.ev_action::pg_catalog.text AS tree FROM pg_rewrite AS r JOIN pg_class AS c ON c.oid = r.ev_class JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND ${others} UNION ALL SELECT p.prosqlbody::pg_catalog.text FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE p.prosqlbody IS NOT NULL AND ${others}`;
+  const trees = `(WITH "kept" AS MATERIALIZED (${kept}) SELECT coalesce(json_agg(k.tree), '[]'::pg_catalog.json) FROM "kept" AS k WHERE k.tree ~ ${aliasList})`;
+  // Of them, none of a log's own functions, of this log or of another an event trigger tells of: a
+  // word of their text (`keys`, `n`) is no type's, though a staging table has its name. An
+  // application's function of such a name, of other arguments or another schema, is read; so is one
+  // of an application's type that reads as PostgreSQL's (`public.text`), as a signature holds
+  // PostgreSQL's oids, and any where an application's `=` answers no value: only a match is a log's.
+  const logFunctions = LOG_SQL_FUNCTIONS.map((signature) => literal(signature)).join(', ');
+  const logSchema = `(n.nspname = ${literal(followed.namespace)} OR EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger AS e JOIN pg_catalog.pg_proc AS q ON q.oid = e.evtfoid WHERE q.pronamespace = n.oid AND q.proname = 'note_ddl' AND e.evtname = n.nspname || '_ddl'))`;
+  const logFunction = `coalesce(CASE WHEN ${logSchema} THEN pg_catalog.format('%s(%s)', p.proname, p.proargtypes) OPERATOR(pg_catalog.=) ANY (ARRAY[${logFunctions}]::pg_catalog.text[]) END, false)`;
+  const bodies = `(SELECT coalesce(json_agg(p.prosrc), '[]'::pg_catalog.json) FROM pg_proc AS p JOIN pg_language AS l ON l.oid = p.prolang JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE l.lanname = 'sql' AND p.prosqlbody IS NULL AND ${others} AND NOT ${logFunction})`;
+  const builtinTypes = `(SELECT json_agg(json_build_array(t.typname, pg_type_is_visible(t.oid))) FROM pg_type AS t WHERE t.typnamespace = 'pg_catalog'::pg_catalog.regnamespace AND t.typrelid = 0)`;
+  // User-defined scalar and explicitly declared composite types are permanent too, even where
+  // no followed column uses them. Automatic table row types and arrays stay out of this list.
+  const permanentTypes = `(SELECT json_agg(json_build_array(n.nspname, t.typname, pg_type_is_visible(t.oid))) FROM pg_type AS t JOIN pg_namespace AS n ON n.oid = t.typnamespace LEFT JOIN pg_class AS c ON c.oid = t.typrelid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') AND n.nspname !~ '^pg_(toast_)?temp_' AND t.typelem = 0 AND (t.typrelid = 0 OR c.relkind = 'c'))`;
+  const keywords = `(SELECT json_agg(json_build_array(word, catcode)) FROM pg_catalog.pg_get_keywords())`;
+  const inherited = `EXISTS (SELECT 1 FROM pg_inherits AS i WHERE i.inhrelid = c.oid)`;
+  // A temporary relation's row type the schema's count follows as it changes, whether an event
+  // trigger counts the schema's commands (`capture.ts`) or the digest alone tells (`digest.ts`):
+  // a view's, one of the name of a type of PostgreSQL's or of the application's — the log's own
+  // schema's are the digest's alone — or one a domain, a range, a function or a composite type's
+  // attribute is of, whose drop and change are counted too: none of a log's own schema, this log's
+  // or another's an event trigger tells of, whose own functions are counted of nothing. A staging table's
+  // column, rule or constraint is none such: its drop is counted of nothing, after which a change
+  // of the type would be of nothing either. Nor, to keep the first plan's catalog lean, is a view.
+  // Each dependency names its object's kind — a domain's and a range's are a type's — and schema,
+  // quoted as an identifier is (a log of a keyword's name, `user`), of no join of their catalogs.
+  const application = `(o.nspname = 'pg_catalog' OR (o.nspname NOT IN ('information_schema', 'pg_toast', ${literal(followed.namespace)}) AND o.nspname !~ '^pg_(toast_)?temp_'))`;
+  const anotherLog = `EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger AS e JOIN pg_catalog.pg_proc AS q ON q.oid = e.evtfoid JOIN pg_catalog.pg_namespace AS m ON m.oid = q.pronamespace WHERE pg_catalog.quote_ident(m.nspname) = d.schema AND q.proname = 'note_ddl' AND e.evtname = m.nspname || '_ddl')`;
+  const dependent = `EXISTS (SELECT 1 FROM pg_depend AS p, pg_catalog.pg_identify_object(p.classid, p.objid, 0) AS d WHERE p.refclassid = 'pg_type'::pg_catalog.regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n' AND d.type IN ('aggregate', 'composite type', 'function', 'procedure', 'type') AND d.schema IS DISTINCT FROM pg_catalog.quote_ident(${literal(followed.namespace)}) AND NOT ${anotherLog})`;
+  const counted = `(c.relkind = 'v' OR EXISTS (SELECT 1 FROM pg_type AS a JOIN pg_namespace AS o ON o.oid = a.typnamespace WHERE a.typname = t.typname AND ${application}) OR ${dependent})`;
+  // Each type of the session's temporary schema but an array, as of the application's: its
+  // relation's kind, where it is a row type, and whether the count follows that relation.
+  const temporary = `(SELECT json_agg(json_build_array(n.nspname, t.typname, pg_type_is_visible(t.oid), c.relkind, t.typrelid <> 0 AND ${counted})) FROM pg_type AS t JOIN pg_namespace AS n ON n.oid = t.typnamespace LEFT JOIN pg_class AS c ON c.oid = t.typrelid WHERE t.typnamespace = pg_my_temp_schema() AND t.typelem = 0)`;
+  return `SELECT current_setting('server_version_num')::pg_catalog.int4 AS "version", current_setting('standard_conforming_strings') = 'on' AS "conforming", getdatabaseencoding() = 'UTF8' AS "utf8", ${operators} AS "operators", ${trees} AS "trees", ${bodies} AS "bodies", ${temporary} AS "temporary", ${builtinTypes} AS "builtinTypes", ${permanentTypes} AS "permanentTypes", ${keywords} AS "keywords", coalesce((SELECT json_agg(json_build_object('schema', n.nspname, 'name', c.relname, 'kind', c.relkind, 'typeVisible', pg_type_is_visible(c.reltype), 'partition', c.relispartition, 'inherited', ${inherited}, 'hidden', c.relrowsecurity, 'columns', ${columns})) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (${listed})), '[]'::pg_catalog.json) AS "tables"`;
 }
 
 /** `value` as a record of fields, where it is an object of JSON's. */
@@ -219,28 +248,137 @@ function keysOfTable(
   return usable;
 }
 
-/** The tables of `tables`, the rows of `catalogSql`'s list, that are partitioned or are partitions. */
-function partitionedIn(tables: readonly unknown[]): ReadonlySet<string> {
-  const found = new Set<string>();
-  for (const each of tables) {
-    const table = recordOf(each) ?? {};
-    if (table['kind'] === 'p' || table['partition'] === true) {
-      found.add(relationKey({ name: String(table['name']), schema: String(table['schema']) }));
+/**
+ * The types of `value`, a list of JSON's of `[schema, name, visible]` items — of `[name, visible]`
+ * items where `schema` is the schema of them all.
+ */
+function typesOf(value: unknown, schema?: string): KnownType[] {
+  const types: KnownType[] = [];
+  const items = listOf(value);
+  for (const each of items) {
+    const parts = Array.isArray(each) ? (each as unknown[]) : [];
+    const [namespace, name, visible] = schema === undefined ? parts : [schema, ...parts];
+    if (typeof namespace === 'string' && typeof name === 'string') {
+      types.push({ name, schema: namespace, visible: visible === true });
     }
   }
-  return found;
+  return types;
 }
 
-/** The tables of `tables` that inherit from another and are no partitions. */
-function inheritedIn(tables: readonly unknown[]): ReadonlySet<string> {
-  const found = new Set<string>();
+/** The types of the followed tables' columns, and each table's row type, as `tables` says them. */
+function tableTypesOf(tables: readonly unknown[]): KnownType[] {
+  const types: KnownType[] = [];
   for (const each of tables) {
     const table = recordOf(each) ?? {};
-    if (table['inherits'] === true && table['kind'] !== 'p' && table['partition'] !== true) {
-      found.add(relationKey({ name: String(table['name']), schema: String(table['schema']) }));
+    const columns = listOf(table['columns']);
+    for (const column of columns) {
+      const type = recordOf(column) ?? {};
+      if (typeof type['type'] === 'string' && typeof type['type_schema'] === 'string') {
+        types.push({
+          name: type['type'],
+          schema: type['type_schema'],
+          visible: type['visible'] === true,
+        });
+      }
+    }
+    if (typeof table['name'] === 'string' && typeof table['schema'] === 'string') {
+      types.push({
+        name: table['name'],
+        schema: table['schema'],
+        visible: table['typeVisible'] === true,
+      });
     }
   }
-  return found;
+  return types;
+}
+
+/** The temporary row types whose changes nothing counts, and the temporary types a cast may name. */
+interface Temporary {
+  readonly known: readonly KnownType[];
+  readonly unfollowed: readonly TemporaryRowType[];
+}
+
+/**
+ * Of the session's temporary types as `temporary` says them, the row types of relations whose
+ * changes nothing counts — staging tables' — and those a cast may name, by the schema's own name
+ * and as `pg_temp`'s: a domain, an enum, a range, a composite type, and a row type the count
+ * follows.
+ */
+function temporaryOf(value: unknown): Temporary {
+  const known: KnownType[] = [];
+  const unfollowed: TemporaryRowType[] = [];
+  const items = listOf(value);
+  for (const each of items) {
+    const [schema, name, visible, kind, counted] = Array.isArray(each) ? (each as unknown[]) : [];
+    if (typeof schema !== 'string' || typeof name !== 'string') continue;
+    const type = { name, schema, visible: visible === true };
+    if (kind === null || kind === 'c' || counted === true) {
+      known.push(type, { ...type, schema: TEMPORARY_SCHEMA });
+    } else if (typeof kind === 'string' && RELATION_KINDS.has(kind)) {
+      unfollowed.push(type);
+    }
+  }
+  return { known, unfollowed };
+}
+
+/**
+ * The types an explicit cast or a typed literal may name, of the initial catalog: PostgreSQL's, the
+ * application's, the followed tables' columns' and rows', and the session's temporary types the
+ * schema's count follows (`temporaryOf`).
+ */
+function castTypesOf(
+  row: Readonly<Record<string, unknown>>,
+  temporary: readonly KnownType[],
+): readonly KnownType[] {
+  return [
+    ...typesOf(row['builtinTypes'], 'pg_catalog'),
+    ...typesOf(row['permanentTypes']),
+    ...tableTypesOf(listOf(row['tables'])),
+    ...temporary,
+  ];
+}
+
+/** PostgreSQL's keyword classes, without a second query on a render's path. */
+function keywordsOf(row: Readonly<Record<string, unknown>>): TypeKeywords | undefined {
+  const all = new Set<string>();
+  const nonTypes = new Set<string>();
+  const reserved = new Set<string>();
+  const keywords = listOf(row['keywords']);
+  for (const each of keywords) {
+    const [word, category] = Array.isArray(each) ? (each as unknown[]) : [];
+    if (typeof word !== 'string') continue;
+    all.add(word);
+    if (category === 'R' || category === 'C') nonTypes.add(word);
+    if (category === 'R') reserved.add(word);
+  }
+  return all.size === 0 ? undefined : { all, nonTypes, reserved };
+}
+
+/** Admission metadata stays available even where no row condition can be followed safely. */
+function admissionOf(row: Readonly<Record<string, unknown>>, followed: Followed) {
+  const temporary = temporaryOf(row['temporary']);
+  const castTypes = castTypesOf(row, temporary.known);
+  const typeKeywords = keywordsOf(row);
+  const unsupported = new Set<string>();
+  const tables = listOf(row['tables']);
+  for (const each of tables) {
+    const table = recordOf(each) ?? {};
+    if (table['partition'] !== true && table['kind'] !== 'p' && table['inherited'] !== true)
+      continue;
+    const declared = followed.byRelation.get(
+      relationKey({ name: String(table['name']), schema: String(table['schema']) }),
+    );
+    if (declared !== undefined) unsupported.add(declared);
+  }
+  const temporaryTypes = temporary.unfollowed;
+  const temporaryBody = listOf(row['bodies']).some((body) => {
+    return (
+      typeof body === 'string' &&
+      (namesTemporaryRowType(body, temporaryTypes, row['conforming'] === true) ||
+        unknownTypeCast(body, castTypes, row['conforming'] === true, typeKeywords))
+    );
+  });
+  return { castTypes, temporaryBody, temporaryTypes, typeKeywords, unsupported };
 }
 
 /** What the rows `catalogSql` answered say, of the tables `followed` follows. */
@@ -250,17 +388,14 @@ export function catalogOf(rows: unknown, followed: Followed): Catalog {
   const version = row['version'];
   const conforming = row['conforming'] === true;
   const utf8 = row['utf8'] === true;
-  const partitioned = partitionedIn(listOf(row['tables']));
-  const inherited = inheritedIn(listOf(row['tables']));
+  const admission = admissionOf(row, followed);
   if (
     typeof version !== 'number' ||
     version < CONDITIONS_SINCE ||
     row['operators'] !== false ||
     renamesIn(row['trees'], row['bodies'], conforming)
   ) {
-    // No condition is followed, but which tables are partitioned or inherit is not a condition's
-    // fact.
-    return { ...NO_CONDITIONS, inherited, partitioned };
+    return { ...NO_CONDITIONS, ...admission, conforming };
   }
   const keys = new Map<string, ReadonlySet<string>>();
   const types = new Map<string, ReadonlyMap<string, string>>();
@@ -288,5 +423,5 @@ export function catalogOf(rows: unknown, followed: Followed): Catalog {
     oids.set(declared, usable.oids);
     if (table['hidden'] !== false) hidden.add(declared);
   }
-  return { conforming, hidden, inherited, keys, oids, partitioned, types, typeSchemas };
+  return { ...admission, conforming, hidden, keys, oids, types, typeSchemas };
 }

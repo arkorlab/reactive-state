@@ -13,7 +13,9 @@ import { engineOf, openedWith } from './support/drizzle.ts';
 /**
  * A partitioned table is no table the log follows: a plan names its partitions, and a write to it is
  * logged as the table's, never as a partition's. A render that reads one is refused, whichever of the
- * table and its partitions the schema declares, and not served a read no write renders again.
+ * table and its partitions the schema declares, and not served a read no write renders again: by the
+ * fault of a hierarchy where the schema declares what the plan names, and by that of a table nothing
+ * follows where it does not.
  */
 
 const parted = pgTable('parted', { id: text().notNull(), region: text().notNull() });
@@ -28,41 +30,51 @@ const PARTITIONED = `
   INSERT INTO parted VALUES ('a', 'eu');
   INSERT INTO plain VALUES ('p');
 `;
-const REFUSED = 'does not follow partitioned tables';
+/** What a render is refused by that reads a partition, or a partitioned table, the schema declares. */
+const HIERARCHY = 'A render reads no table of an inheritance or partition hierarchy';
+/** What a render is refused by whose plan names a partition the schema does not declare. */
+const UNFOLLOWED = /^A render read public\.parted_(?:eu|us), which reactive-state does not follow/u;
 /** Each test makes a PGlite of its own, as long as a second and more under load. */
 const TEST_TIMEOUT_MS = 20_000;
 
-/** How long a held answer waits once the statement beside it has been answered: a render's microtasks fit in it. */
+/** How long the statement beside the one that asked the catalog is given to ask a plan it asks not. */
 const HELD_MS = 20;
-/** What the statement that asks the catalog begins with. */
+/** What the statement that asks the catalog begins with, and what a plan is asked by. */
 const CATALOG = "SELECT current_setting('server_version_num')";
+const EXPLAIN = 'EXPLAIN (GENERIC_PLAN';
 
 /**
- * Holds the answer of the first statement that carries the catalog until the next that `pg` runs has
- * been answered and its render has gone on, as a connection that answers out of turn would.
+ * Holds the answer of the first statement that carries the catalog, as a connection slow to answer
+ * it would, until `release` is called. `besideChecked` settles once `pg` has answered the two
+ * statements' first plans, of nulls, which each asks before the plan it keeps; `plans` are the
+ * statements that asked a plan to keep so far.
  */
-function catalogLast(pg: PGlite): void {
+function catalogHeld(pg: PGlite) {
   const exec = pg.exec.bind(pg);
   const held = Promise.withResolvers<undefined>();
   let asked = false;
-  vi.spyOn(pg, 'exec').mockImplementation(async (statement, options) => {
+  const checked = vi.spyOn(pg, 'query');
+  const planned = vi.spyOn(pg, 'exec').mockImplementation(async (statement, options) => {
     const answered = exec(statement, options);
-    if (!asked && statement.startsWith(CATALOG)) {
-      asked = true;
-      const results = await answered;
-      await held.promise;
-      await sleep(HELD_MS);
-      return results;
-    }
-    if (asked) {
-      try {
-        return await answered;
-      } finally {
-        held.resolve(undefined);
-      }
-    }
-    return answered;
+    if (asked || !statement.startsWith(CATALOG)) return answered;
+    asked = true;
+    const results = await answered;
+    await held.promise;
+    return results;
   });
+  const checks = () => checked.mock.calls.filter(([statement]) => statement.startsWith(EXPLAIN));
+  return {
+    besideChecked: async (): Promise<void> => {
+      await vi.waitFor(() => {
+        expect(checks()).toHaveLength(2);
+      });
+      await Promise.allSettled(checked.mock.results.map((result) => result.value as unknown));
+    },
+    plans: () => planned.mock.calls.filter(([statement]) => statement.includes(EXPLAIN)),
+    release: (): void => {
+      held.resolve(undefined);
+    },
+  };
 }
 
 /** Whether `statement` ran, for a render that goes on where it failed. */
@@ -88,21 +100,27 @@ describe('a render that reads a partitioned table', { timeout: TEST_TIMEOUT_MS }
     const setup = await openedWith({ parted }, PARTITIONED);
     const { render } = await engineOf(setup, reading(setup, sql`SELECT id FROM parted`));
 
-    await expect(render()).rejects.toThrow(REFUSED);
+    await expect(render()).rejects.toThrow(UNFOLLOWED);
   });
 
-  it('is refused where the schema declares the partitions too, not served a read no write renders again', async () => {
-    const setup = await openedWith({ parted, partedEu }, PARTITIONED);
-    const evaluate = reading(setup, sql`SELECT id FROM parted ORDER BY id`);
-    const { engine, render } = await engineOf(setup, evaluate);
+  it.each([
+    ['one of its partitions too', { parted, partedEu }, UNFOLLOWED],
+    ['each of its partitions too', { parted, partedEu, partedUs }, HIERARCHY],
+  ])(
+    'is refused where the schema declares %s, not served a read no write renders again',
+    async (_name, declared, refused) => {
+      const setup = await openedWith(declared, PARTITIONED);
+      const evaluate = reading(setup, sql`SELECT id FROM parted ORDER BY id`);
+      const { engine, render } = await engineOf(setup, evaluate);
 
-    await expect(render()).rejects.toThrow(REFUSED);
+      await expect(render()).rejects.toThrow(refused);
 
-    await setup.orm.insert(parted).values({ id: 'b', region: 'eu' });
-    await engine.poke();
+      await setup.orm.insert(parted).values({ id: 'b', region: 'eu' });
+      await engine.poke();
 
-    await expect(render()).rejects.toThrow(REFUSED);
-  });
+      await expect(render()).rejects.toThrow(refused);
+    },
+  );
 
   it('is refused where it reads a partition directly, declared or not', async () => {
     const declaredAlone = await openedWith({ partedEu }, PARTITIONED);
@@ -111,7 +129,7 @@ describe('a render that reads a partitioned table', { timeout: TEST_TIMEOUT_MS }
       reading(declaredAlone, sql`SELECT id FROM parted_eu`),
     );
 
-    await expect(alone.render()).rejects.toThrow(REFUSED);
+    await expect(alone.render()).rejects.toThrow(HIERARCHY);
 
     const ofDeclaredTable = await openedWith({ parted }, PARTITIONED);
     const direct = await engineOf(
@@ -119,30 +137,36 @@ describe('a render that reads a partitioned table', { timeout: TEST_TIMEOUT_MS }
       reading(ofDeclaredTable, sql`SELECT id FROM parted_eu`),
     );
 
-    await expect(direct.render()).rejects.toThrow(REFUSED);
+    await expect(direct.render()).rejects.toThrow(UNFOLLOWED);
   });
 
-  it('is refused where it is read beside an ordinary table in one render, whichever statement is asked first', async () => {
-    const setup = await openedWith({ parted, plain }, PARTITIONED);
-    const { render } = await engineOf(setup, async (_props, $) => {
-      const [ordinary, partitioned] = await Promise.all([
-        setup.orm.execute(sql`SELECT id FROM plain`),
-        setup.orm.execute(sql`SELECT id FROM parted`),
-      ]);
-      return $.h('p', null, JSON.stringify([ordinary.rows.length, partitioned.rows.length]));
-    });
+  it.each([
+    ['the table alone', { parted, plain }, UNFOLLOWED],
+    ['its partitions too', { parted, partedEu, partedUs, plain }, HIERARCHY],
+  ])(
+    'is refused where it is read beside an ordinary table in one render, as the schema declares %s',
+    async (_name, declared, refused) => {
+      const setup = await openedWith(declared, PARTITIONED);
+      const { render } = await engineOf(setup, async (_props, $) => {
+        const [ordinary, partitioned] = await Promise.all([
+          setup.orm.execute(sql`SELECT id FROM plain`),
+          setup.orm.execute(sql`SELECT id FROM parted`),
+        ]);
+        return $.h('p', null, JSON.stringify([ordinary.rows.length, partitioned.rows.length]));
+      });
 
-    await expect(render()).rejects.toThrow(REFUSED);
-  });
+      await expect(render()).rejects.toThrow(refused);
+    },
+  );
 
   it.each([
     ['the ordinary table', 'plain'],
     ['the partitioned table', 'parted'],
   ] as const)(
-    'is refused where the catalog is answered after the statement beside it, which asked it first for %s',
+    'is refused where the catalog is answered late, the statement beside the one that asked it, for %s, asking no plan before',
     async (_name, first) => {
       const setup = await openedWith({ parted, partedEu, partedUs, plain }, PARTITIONED);
-      catalogLast(setup.pg);
+      const catalog = catalogHeld(setup.pg);
       const { render } = await engineOf(setup, async (_props, $) => {
         const reads = [
           () => setup.orm.execute(sql`SELECT id FROM plain`),
@@ -154,7 +178,19 @@ describe('a render that reads a partitioned table', { timeout: TEST_TIMEOUT_MS }
         return $.h('p', null, JSON.stringify([ordinary?.rows.length, partitioned?.rows.length]));
       });
 
-      await expect(render()).rejects.toThrow(REFUSED);
+      const rendered = Promise.allSettled([render()]);
+      await catalog.besideChecked();
+      await sleep(HELD_MS);
+      const asked = catalog.plans().length;
+      catalog.release();
+      const [outcome] = await rendered;
+
+      // One plan, the one that carries the catalog: the statement beside it awaited its answer.
+      expect(asked).toBe(1);
+      expect(outcome).toMatchObject({
+        reason: { message: expect.stringContaining(HIERARCHY) },
+        status: 'rejected',
+      });
     },
   );
 
@@ -175,12 +211,12 @@ describe('a render that reads a partitioned table', { timeout: TEST_TIMEOUT_MS }
     });
 
     await expect(render()).rejects.toBeInstanceOf(Error);
-    await expect(render()).rejects.toThrow(REFUSED);
+    await expect(render()).rejects.toThrow(HIERARCHY);
 
     await setup.orm.insert(parted).values({ id: 'b', region: 'eu' });
     await engine.poke();
 
-    await expect(render()).rejects.toThrow(REFUSED);
+    await expect(render()).rejects.toThrow(HIERARCHY);
   });
 
   it('is refused where a join reads one, whatever else it reads', async () => {
@@ -190,7 +226,7 @@ describe('a render that reads a partitioned table', { timeout: TEST_TIMEOUT_MS }
       reading(setup, sql`SELECT plain.id FROM plain JOIN parted ON parted.id = plain.id`),
     );
 
-    await expect(render()).rejects.toThrow(REFUSED);
+    await expect(render()).rejects.toThrow(UNFOLLOWED);
   });
 });
 
@@ -227,28 +263,39 @@ describe(
   },
 );
 
-/** The followed tables of the rows below: a partitioned table and an ordinary one. */
+/** The followed tables of the rows below: a partitioned table, a partition of it and an ordinary one. */
 const followed: Followed = {
   byRelation: new Map([
     ['public.parted', 'parted'],
+    ['public.parted_eu', 'partedEu'],
     ['public.plain', 'plain'],
   ]),
   keysByTable: new Map([
     ['parted', [{ column: 'id', field: 'k_id', kind: 'text' }]],
+    ['partedEu', [{ column: 'id', field: 'k_id', kind: 'text' }]],
     ['plain', [{ column: 'id', field: 'k_id', kind: 'text' }]],
   ]),
   namespace: 'reactive_state',
   relations: [
     { name: 'parted', schema: 'public' },
+    { name: 'parted_eu', schema: 'public' },
     { name: 'plain', schema: 'public' },
   ],
   schema: { generation: 0 },
   schemaTable: 'reactive_state_schema_sql',
 };
 
-/** A table as the catalog says it, with no column. */
+/** A table as the catalog says it, with no column: a partition inherits from its table. */
 function catalogTable(name: string, kind: string, partition: boolean) {
-  return { columns: [], hidden: false, kind, name, partition, schema: 'public' };
+  return {
+    columns: [],
+    hidden: false,
+    inherited: partition,
+    kind,
+    name,
+    partition,
+    schema: 'public',
+  };
 }
 
 const TABLES = [
@@ -257,23 +304,26 @@ const TABLES = [
   catalogTable('plain', 'r', false),
 ];
 
-describe('which tables the catalog says are partitioned', () => {
+describe('which followed tables the catalog says a render reads none of', () => {
   it.each<readonly [string, Record<string, unknown>]>([
     ['a catalog that follows conditions', { operators: false, utf8: true, version: 180_000 }],
     ['a PostgreSQL before 17', { operators: false, version: 160_004 }],
     ['an application `=` of a type a key may be', { operators: true, version: 180_000 }],
-  ])('names the table, a partition of it, and no ordinary table: %s', (_name, facts) => {
-    const { partitioned } = catalogOf([{ ...facts, tables: TABLES }], followed);
+  ])(
+    'names the partitioned table, a partition of it, and no ordinary table: %s',
+    (_name, facts) => {
+      const { unsupported } = catalogOf([{ ...facts, tables: TABLES }], followed);
 
-    expect(partitioned).toStrictEqual(new Set(['public.parted', 'public.parted_eu']));
-  });
+      expect(unsupported).toStrictEqual(new Set(['parted', 'partedEu']));
+    },
+  );
 
   it('names none where no table is partitioned, and where there is no catalog', () => {
     const ordinary = [catalogTable('parted', 'r', false), catalogTable('plain', 'r', false)];
 
     expect(
-      catalogOf([{ operators: false, tables: ordinary, version: 180_000 }], followed).partitioned,
+      catalogOf([{ operators: false, tables: ordinary, version: 180_000 }], followed).unsupported,
     ).toStrictEqual(new Set());
-    expect(NO_CONDITIONS.partitioned).toBeUndefined();
+    expect(NO_CONDITIONS.unsupported).toBeUndefined();
   });
 });

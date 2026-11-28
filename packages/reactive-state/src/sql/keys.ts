@@ -44,7 +44,7 @@ export interface Followed {
    * asked before is kept no more, nor what the catalog said (`client.ts`). One of the namespace's,
    * whatever `followDrizzle` a client or a store is of.
    */
-  readonly schema: { generation: number };
+  readonly schema: { generation: number; context?: number };
 }
 
 /** Each Drizzle column type a key may be, by the kind of its value. */

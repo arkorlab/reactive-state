@@ -126,7 +126,7 @@ function pageSql(namespace: string): string {
   const floor = `CASE WHEN ${overflows} THEN h."seq" + 1 ELSE coalesce((SELECT min("seq") FROM ${changes}), CASE WHEN h."seq" = 0 THEN 0 ELSE h."seq" + 1 END) END`;
   const rows = `(SELECT json_agg(json_build_array(p."seq", p."schema_name", p."table_name", p."side", p."image") ORDER BY p."seq") FROM "page" AS p)`;
   const tables = `(SELECT json_agg(json_build_array(f."seq", f."schema_name", f."table_name") ORDER BY f."seq") FROM "folded" AS f WHERE NOT ${overflows})`;
-  return `WITH "page" AS (${page}), "folded" AS (${folded}) SELECT h."epoch", ${schema}."ddl_count"() AS "ddl", h."seq" AS "head", ${floor} AS "floor", coalesce(${rows}, ${tables}, '[]'::json) AS "page" FROM ${head} AS h`;
+  return `WITH "page" AS (${page}), "folded" AS (${folded}) SELECT h."epoch", ${schema}."ddl_count"() AS "ddl", h."seq" AS "head", ${floor} AS "floor", coalesce(${rows}, ${tables}, '[]'::pg_catalog.json) AS "page" FROM ${head} AS h`;
 }
 
 /** What `db.<table>` is answered for a table read by SQL: a fault, which names the way to read it. */
@@ -177,7 +177,8 @@ export function sqlStore(client: Queryable, followed: Followed): ExternalStore {
       counted = ddl;
       return {
         changes: entriesOf(row['page'], followed),
-        epoch: `${epoch}:${ddl}:${digest}`,
+        // Observed session changes can change and change back before the digest is read again.
+        epoch: `${epoch}:${ddl}:${digest}:${String(followed.schema.context ?? 0)}`,
         floor: logNumber(row['floor'], 'floor'),
         head: logNumber(row['head'], 'head'),
       };
@@ -201,12 +202,12 @@ export async function pruneSqlChanges(
 ): Promise<void> {
   const { changes, schema } = logOf(namespace);
   await client.query(
-    `DELETE FROM ${changes} WHERE "seq" <= (SELECT max("seq") FROM ${changes} WHERE "at" < to_timestamp($1::double precision / 1000))`,
+    `DELETE FROM ${changes} WHERE "seq" <= (SELECT max("seq") FROM ${changes} WHERE "at" < to_timestamp($1::pg_catalog.float8 / 1000))`,
     [before],
   );
   await queryCapture(
     client,
-    `SELECT ${schema}."fold_ddl"($1::double precision)`,
+    `SELECT ${schema}."fold_ddl"($1::pg_catalog.float8)`,
     [before],
     namespace,
   );
