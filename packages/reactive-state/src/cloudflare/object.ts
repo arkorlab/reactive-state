@@ -249,6 +249,11 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
     this.#host = hostOf(setup.database);
     this.#storage = ctx.storage;
     this.#buildId = setup.buildId;
+    // Before the start below, which asks the log of the alarm, not after: a runtime that calls
+    // `blockConcurrencyWhile`'s callback at once, and not once the constructor ends as workerd
+    // does, would else find none.
+    const alarm = new ObjectAlarm(ctx.storage);
+    this.#alarm = alarm;
     const host = this.#host;
     if (host !== undefined) {
       // A log this object made for this build is there: it is made again beside the calls, as a
@@ -272,8 +277,6 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
     // database opens, in one transaction, and the data is the object's from then on. A database of
     // another schema is refused, and the object with it, rather than read as something else.
     const sql = durableObjectSql(ctx.storage);
-    const alarm = new ObjectAlarm(ctx.storage);
-    this.#alarm = alarm;
     const options: AuthorityEngineOptions = {
       buildId: setup.buildId,
       database: setup.database,
