@@ -1,12 +1,13 @@
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { sql as raw } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { pgTable, text } from 'drizzle-orm/pg-core';
 import { Client, Pool } from 'pg';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
 import type { OperationCall } from '../src/program.ts';
-import { endsTransaction } from '../src/sql/client-writes.ts';
+import { endsTransaction, rollsBack } from '../src/sql/client-writes.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { engineOf, openedWith } from './support/drizzle.ts';
 
@@ -71,7 +72,8 @@ async function pooled() {
     await server.stop();
     await db.close();
   });
-  return { follow, pg: store, tracked: follow.client(connections) };
+  const tracked = follow.client(connections);
+  return { follow, orm: drizzle({ client: tracked, schema }), pg: store, tracked };
 }
 
 /** The call of `name` of the test's module. */
@@ -173,6 +175,117 @@ describe('an operation whose transaction ended in a form the poolâ€™s client doe
       );
 
       const answer = await rejection(engine.operate(session, callOf('several')));
+
+      expect(answer).toMatchObject({ code: 'OPERATION_FAILED' });
+      await expect(heldIds(setup.pg)).resolves.toStrictEqual(['t1', 't2']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'answers the refusal of a transaction a `ROLLBACK` undid after a rollback to a savepoint of no keyword',
+    async () => {
+      const setup = await pooled();
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            undone: async (): Promise<void> => {
+              const connection = await setup.tracked.connect();
+              try {
+                await connection.query('BEGIN');
+                await connection.query("INSERT INTO tasks VALUES ('t2', 'Undone')");
+                await connection.query('SAVEPOINT sp');
+                await connection.query('ROLLBACK TO sp');
+                await connection.query('ROLLBACK');
+              } finally {
+                connection.release();
+              }
+              throw new Error('after the rollback');
+            },
+          },
+        },
+        {},
+      );
+
+      const answer = await rejection(engine.operate(session, callOf('undone')));
+
+      expect(answer).toMatchObject({ code: 'OPERATION_REJECTED', status: 422 });
+      await expect(heldIds(setup.pg)).resolves.toStrictEqual(['t1']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'answers the refusal of a transaction whose `COMMIT` PostgreSQL answered as a `ROLLBACK`, of an error the code caught',
+    async () => {
+      const setup = await pooled();
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            aborted: async (): Promise<void> => {
+              await setup.orm.transaction(async (tx) => {
+                await tx.insert(tasks).values({ id: 't2', title: 'Undone' });
+                try {
+                  await tx.execute(raw`SELECT 1 / 0`);
+                } catch {
+                  // The transaction is aborted: its `COMMIT` rolls it back, and answers no error.
+                }
+              });
+              throw new Error('after the commit');
+            },
+          },
+        },
+        {},
+      );
+      const call = callOf('aborted');
+
+      const first = await rejection(engine.operate(session, call));
+      const again = await rejection(engine.operate(session, call));
+
+      expect(first).toMatchObject({ code: 'OPERATION_REJECTED', status: 422 });
+      expect(again).toMatchObject({ code: 'OPERATION_REJECTED', status: 422 });
+      await expect(heldIds(setup.pg)).resolves.toStrictEqual(['t1']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'answers a failure of a transaction that committed, whose earlier `COMMIT AND CHAIN` landed, though its own `COMMIT` was a `ROLLBACK`',
+    async () => {
+      const setup = await pooled();
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            chained: async (): Promise<void> => {
+              const connection = await setup.tracked.connect();
+              try {
+                await connection.query('BEGIN');
+                await connection.query("INSERT INTO tasks VALUES ('t2', 'Kept')");
+                await connection.query('COMMIT AND CHAIN');
+                await connection.query("INSERT INTO tasks VALUES ('t3', 'Undone')");
+                try {
+                  await connection.query('SELECT 1 / 0');
+                } catch {
+                  // The chained transaction is aborted: its `COMMIT` rolls it back.
+                }
+                await connection.query('COMMIT');
+              } finally {
+                connection.release();
+              }
+              throw new Error('after the commit');
+            },
+          },
+        },
+        {},
+      );
+
+      const answer = await rejection(engine.operate(session, callOf('chained')));
 
       expect(answer).toMatchObject({ code: 'OPERATION_FAILED' });
       await expect(heldIds(setup.pg)).resolves.toStrictEqual(['t1', 't2']);
@@ -318,6 +431,36 @@ describe('an operation whose PGlite transaction was ended by a text of the codeâ
     TEST_TIMEOUT_MS,
   );
 
+  it.each([['ROLLBACK TO sp'], ['ROLLBACK TO SAVEPOINT sp;'], ['ROLLBACK WORK TO SAVEPOINT sp']])(
+    'answers a failure when `%s` followed a write the transaction then committed',
+    async (rollback) => {
+      const setup = await openedWith(schema, DDL);
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            toSavepoint: async (): Promise<void> => {
+              await setup.orm.transaction(async (tx) => {
+                await tx.insert(tasks).values({ id: 't2', title: 'Kept' });
+                await tx.execute(raw`SAVEPOINT sp`);
+                await tx.execute(raw.raw(rollback));
+              });
+              throw new Error('after the commit');
+            },
+          },
+        },
+        {},
+      );
+
+      const answer = await rejection(engine.operate(session, callOf('toSavepoint')));
+
+      expect(answer).toMatchObject({ code: 'OPERATION_FAILED' });
+      await expect(heldByPglite(setup.pg)).resolves.toStrictEqual(['t1', 't2']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     'answers a failure when a savepoint was rolled back inside what the transaction then committed',
     async () => {
@@ -392,6 +535,10 @@ describe('the statements that end a transaction in a form its client does not re
     ['ROLLBACK AND CHAIN'],
     ["INSERT INTO tasks VALUES ('t2', 'x'); COMMIT"],
     ['SELECT 1; /* a note */ END'],
+    ['COMMIT WORK'],
+    ['ROLLBACK TRANSACTION'],
+    // A text no syntax reads may have ended it.
+    ["SELECT E'a'\n'b'"],
   ])('is ended by `%s`', (sql) => {
     expect(endsTransaction(sql)).toBe(true);
   });
@@ -403,7 +550,34 @@ describe('the statements that end a transaction in a form its client does not re
     ["UPDATE tasks SET title = 'rollback' WHERE id = 'a'"],
     ['DO $$ BEGIN PERFORM 1; END $$'],
     ['SELECT commit_count FROM stats'],
+    ['ROLLBACK TO sp'],
+    ['ROLLBACK TO SAVEPOINT sp;'],
+    ['rollback work to savepoint sp'],
+    ['ROLLBACK TRANSACTION TO sp'],
+    ["COMMIT PREPARED 'x'"],
+    ["ROLLBACK PREPARED 'x'"],
+    [String.raw`SELECT 'C:\dir'`],
   ])('is not ended by `%s`', (sql) => {
     expect(endsTransaction(sql)).toBe(false);
+  });
+});
+
+describe('the statements that roll a whole transaction back', () => {
+  it.each([['ROLLBACK'], ['abort;'], ['ROLLBACK WORK'], ['ROLLBACK AND CHAIN'], ['  rollback  ']])(
+    'is rolled back by `%s`',
+    (sql) => {
+      expect(rollsBack(sql)).toBe(true);
+    },
+  );
+
+  it.each([
+    ['COMMIT'],
+    ['ROLLBACK TO sp'],
+    ['ROLLBACK TO SAVEPOINT sp;'],
+    ['ROLLBACK; COMMIT'],
+    ["ROLLBACK PREPARED 'x'"],
+    ["SELECT 'rollback'"],
+  ])('is not rolled back by `%s`', (sql) => {
+    expect(rollsBack(sql)).toBe(false);
   });
 });
