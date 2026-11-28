@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import { GENERATED, isGeneratedFile, proxyOf } from '../compiler/app-route.ts';
-import { givenHost, type HostInput } from '../compiler/host.ts';
+import { givenHost, type HostInput, hostDigest } from '../compiler/host.ts';
 import { compileApp } from '../compiler/index.ts';
 import {
   isModuleResolutions,
@@ -400,7 +400,7 @@ function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
     JSON.stringify({
       app: path.relative(layout.projectDir, layout.appDir),
       database: options.database,
-      host: [options.session, options.prefetch, options.share, options.sessionChange],
+      host: hostDigest(options),
       // Where said alone: a project that says nothing of it digests as it did before.
       ...(options.prefetchCache !== undefined && { prefetchCache: options.prefetchCache }),
       out: path.relative(layout.projectDir, layout.outDir),

@@ -658,6 +658,13 @@ export interface OperationCall {
   readonly args: readonly OperationArgument[];
   readonly operationId: string;
   readonly build: string;
+  /**
+   * What the application's own server prepared for the operation (`OperationPreparation` of
+   * `./next`): JSON of `PREPARED_LIMIT` bytes at most, which the operation reads with `prepared()`.
+   * From the application's server only; never kept, and no part of the fingerprint that tells a
+   * resend from another call.
+   */
+  readonly prepared?: Json;
 }
 
 /** What an operation answers: what it returned, and the revision it committed at, if it did. */
@@ -726,3 +733,6 @@ export function resourceOf(
  * writes a character at least, so a copy of more values than these can never be accepted.
  */
 export const REQUEST_LIMITS = Object.freeze({ arguments: 262_144, captures: 4096 });
+
+/** The most an operation's preparation takes (`OperationCall.prepared`), in bytes of its JSON text in UTF-8. */
+export const PREPARED_LIMIT = 4096;

@@ -95,6 +95,12 @@ export interface CompileOptions {
    */
   readonly sessionChange?: string;
   /**
+   * The module and the export that prepares an operation on the application's server before the
+   * authority runs it (`OperationPreparation` of `./next`): `<specifier>#<export>`. Not given,
+   * nothing is prepared.
+   */
+  readonly prepareOperation?: string;
+  /**
    * The private cache a root renders inside, for a link's prefetch to carry it: a `cacheLife`
    * profile of the application's config, or `<stale>/<revalidate>/<expire>` in seconds. Not given,
    * no root is cached.

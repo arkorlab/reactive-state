@@ -45,7 +45,13 @@ export {
 } from './kept.ts';
 export { endSession, sessionKey } from './server-calls.ts';
 export { type AuthorityRefusal, authorityRefusal } from './refusals.ts';
-export { operate, OperationError, type SessionChange } from './operate.ts';
+export {
+  operate,
+  OperationError,
+  type OperationPreparation,
+  type OperationToPrepare,
+  type SessionChange,
+} from './operate.ts';
 export { type OperationRefusal, operationRefusal } from '../runtime/outcome.ts';
 export type { Elements } from './render.ts';
 

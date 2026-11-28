@@ -296,7 +296,7 @@ export function renderEvaluation(
  */
 export type OperationHooks = Pick<
   Evaluation,
-  'applicationConnection' | 'changeSession' | 'externalWrite'
+  'applicationConnection' | 'changeSession' | 'externalWrite' | 'prepared'
 >;
 
 /**

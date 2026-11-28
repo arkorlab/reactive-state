@@ -322,6 +322,7 @@ export interface StubHost {
   readonly from: string;
   readonly session: boolean;
   readonly sessionChange: boolean;
+  readonly prepareOperation: boolean;
   /** Whether the build keeps its roots in the deployment's cache (`--prefetch-cache remote`). */
   readonly kept: boolean;
 }
@@ -345,6 +346,11 @@ export function emitStub(operation: OperationModule, buildId: string, host?: Stu
     'sessionChange$',
     (name) => name === source || name === session || operation.exports.includes(name),
   );
+  const prepare = unusedName(
+    'prepareOperation$',
+    (name) =>
+      name === source || name === session || name === change || operation.exports.includes(name),
+  );
   const by =
     host === undefined
       ? literal(buildId)
@@ -352,6 +358,7 @@ export function emitStub(operation: OperationModule, buildId: string, host?: Stu
           `build: ${literal(buildId)}`,
           ...(host.session ? [`session: ${session}`] : []),
           ...(host.sessionChange ? [`sessionChange: ${change}`] : []),
+          ...(host.prepareOperation ? [`prepareOperation: ${prepare}`] : []),
           ...(host.kept ? ['kept: true'] : []),
         ].join(', ')} }`;
   const mirrored = [...(operation.callables?.values() ?? [])].flatMap(
@@ -397,6 +404,9 @@ export function emitStub(operation: OperationModule, buildId: string, host?: Stu
     ...(host?.session === true ? [`import { session as ${session} } from ${host.from};`] : []),
     ...(host?.sessionChange === true
       ? [`import { sessionChange as ${change} } from ${host.from};`]
+      : []),
+    ...(host?.prepareOperation === true
+      ? [`import { prepareOperation as ${prepare} } from ${host.from};`]
       : []),
     ...(needsOriginal ? [`import type * as ${source} from ${operation.written};`] : []),
     ...(mirrored.length === 0 ? [] : ['', `type ${result}<Value> = Promise<Awaited<Value>>;`]),

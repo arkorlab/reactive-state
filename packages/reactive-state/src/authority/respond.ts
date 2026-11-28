@@ -12,7 +12,8 @@ import { AuthorityError } from './errors.ts';
  * (`MAX_TEXT_LENGTH`, 2000 UTF-16 units) fits in it with its binding (4 KiB at most) and the values
  * its update captured (4 KiB), though JSON escapes each unit of a control character as six bytes
  * (`\u0001`): no unit takes more; and so does every server operation `operationCallOf` lets
- * through, whose arguments take 256 Ki units of JSON at most, three bytes of UTF-8 each at most.
+ * through, whose arguments take 256 Ki units of JSON at most, three bytes of UTF-8 each at most, and
+ * whose preparation takes 4 KiB (`PREPARED_LIMIT`) more.
  */
 const MAX_BODY_BYTES = 1_048_576;
 

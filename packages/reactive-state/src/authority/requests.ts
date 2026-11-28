@@ -3,6 +3,7 @@ import {
   type Json,
   type OperationArgument,
   type OperationCall,
+  PREPARED_LIMIT,
   REQUEST_LIMITS,
   type RootRequest,
   type SiteInputs,
@@ -296,11 +297,33 @@ function argumentOf(argument: unknown): OperationArgument {
   throw invalid('INVALID_OPERATION', 'Each argument is sent as `{ json }` or as `{ form }`.');
 }
 
+/**
+ * The preparation an operation is sent (`OperationCall.prepared`), copied as JSON carries it: none
+ * where none was sent, `null` as itself. Refused (400) where it is not JSON, and (413) where it takes
+ * more than `PREPARED_LIMIT` bytes of UTF-8.
+ */
+function preparedOf(prepared: unknown): { readonly prepared?: Json } {
+  if (prepared === undefined) {
+    return {};
+  }
+  if (!isCarriedJson(prepared)) {
+    throw invalid('INVALID_OPERATION', "An operation's preparation is not JSON.");
+  }
+  if (!fitsJson(prepared, PREPARED_LIMIT)) {
+    throw refusal(
+      HTTP_PAYLOAD_TOO_LARGE,
+      'TOO_LARGE',
+      `An operation's preparation is ${String(PREPARED_LIMIT)} bytes of JSON at most.`,
+    );
+  }
+  return { prepared: carried(prepared) };
+}
+
 /** A server operation, as the application's server asks for it to be run. */
 export function operationCallOf(request: unknown): OperationCall {
-  const { args, build, module, name, operationId } = (isObject(request) ? request : {}) as Partial<
-    Record<keyof OperationCall, unknown>
-  >;
+  const { args, build, module, name, operationId, prepared } = (
+    isObject(request) ? request : {}
+  ) as Partial<Record<keyof OperationCall, unknown>>;
   if (
     typeof module !== 'string' ||
     typeof name !== 'string' ||
@@ -337,22 +360,6 @@ export function operationCallOf(request: unknown): OperationCall {
     module,
     name,
     operationId,
+    ...preparedOf(prepared),
   };
-}
-
-/** The arguments an operation is called with: a form's entries as `FormData`, JSON as itself. */
-export function argumentsOf(args: readonly OperationArgument[]): readonly unknown[] {
-  return args.map((argument): unknown => {
-    let value: unknown;
-    if ('json' in argument) {
-      value = argument.json;
-    } else {
-      const form = new FormData();
-      for (const [name, entry] of argument.form) {
-        form.append(name, entry);
-      }
-      value = form;
-    }
-    return value;
-  });
 }

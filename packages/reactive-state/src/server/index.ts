@@ -38,6 +38,7 @@ export {
 } from './schema.ts';
 export type { FieldRef, Json, User, Value } from '../program.ts';
 export { changeSession } from './change-session.ts';
+export { prepared } from './prepared.ts';
 export { refuse } from './refuse.ts';
 
 /**

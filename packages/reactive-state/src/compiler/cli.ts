@@ -9,6 +9,7 @@ import { compileApp, writeOutputs } from './index.ts';
  *
  *   node src/compiler/cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>]
  *     [--session <specifier>#<export>] [--session-change <specifier>#<export>]
+ *     [--prepare-operation <specifier>#<export>]
  *     [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--prefetch-cache <private|remote>]
  *     [--no-share] [--check]
  *
@@ -18,14 +19,15 @@ import { compileApp, writeOutputs } from './index.ts';
  * `--check`, write nothing and exit 1 when any of it is not what a compile would write now.
  * `--session` names how the application reads its own signed-in session, where it signs its users in
  * itself; `--session-change`, how it applies the change of that session a server operation asks for
- * (`changeSession`); `--prefetch`, the private cache the roots a request alone renders are rendered inside, for
+ * (`changeSession`); `--prepare-operation`, how it prepares an operation on its own server before the
+ * authority runs it (`OperationPreparation`); `--prefetch`, the private cache the roots a request alone renders are rendered inside, for
  * a link's prefetch to carry them; `--prefetch-cache remote`, that the deployment's cache keeps them
  * too, by the reader's session; `--no-share`, that nothing is shared — no route's view — and every
  * root renders for its own session.
  */
 
 const USAGE =
-  'usage: cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>] [--session <specifier>#<export>] [--session-change <specifier>#<export>] [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--prefetch-cache <private|remote>] [--no-share] [--check]';
+  'usage: cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>] [--session <specifier>#<export>] [--session-change <specifier>#<export>] [--prepare-operation <specifier>#<export>] [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--prefetch-cache <private|remote>] [--no-share] [--check]';
 const EXIT_FAILED = 1;
 const EXIT_USAGE = 2;
 
@@ -46,6 +48,7 @@ interface Run {
   readonly database: string | undefined;
   readonly session: string | undefined;
   readonly sessionChange: string | undefined;
+  readonly prepareOperation: string | undefined;
   readonly prefetch: string | undefined;
   readonly prefetchCache: string | undefined;
   /** Whether anything may be shared: not where `--no-share` is given. */
@@ -72,6 +75,7 @@ function argumentsOf(argv: readonly string[]): Parsed {
         'prefetch-cache': { type: 'string' },
         session: { type: 'string' },
         'session-change': { type: 'string' },
+        'prepare-operation': { type: 'string' },
       },
     });
   } catch (error) {
@@ -80,6 +84,7 @@ function argumentsOf(argv: readonly string[]): Parsed {
   const { app, check, database, out, prefetch, session } = parsed.values;
   const share = parsed.values['no-share'] !== true;
   const sessionChange = parsed.values['session-change'];
+  const prepareOperation = parsed.values['prepare-operation'];
   const prefetchCache = parsed.values['prefetch-cache'];
   const [srcDir, ...more] = parsed.positionals;
   if (out === undefined || app === undefined || srcDir === undefined || more.length > 0) {
@@ -93,6 +98,7 @@ function argumentsOf(argv: readonly string[]): Parsed {
       out,
       prefetch,
       prefetchCache,
+      prepareOperation,
       session,
       sessionChange,
       share,

@@ -1,14 +1,16 @@
 import { refresh } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 
-import { AUTHORITY_UNAVAILABLE, type Failure } from '../client/index.ts';
+import { AUTHORITY_UNAVAILABLE, type Failure, type SessionId } from '../client/index.ts';
 import {
   type Json,
   type OperationArgument,
   type OperationCall,
+  PREPARED_LIMIT,
   REQUEST_LIMITS,
 } from '../program.ts';
 import { type JsonBudget, jsonBudget, spendJson, toJson } from '../runtime/json.ts';
+import { argumentsOf } from '../runtime/operation-arguments.ts';
 import { operationDigest } from '../runtime/outcome.ts';
 import { HTTP_INTERNAL_ERROR } from '../status.ts';
 import { authority, requestSession, type SessionSource } from './authority.ts';
@@ -153,6 +155,33 @@ function isResendable(failure: Failure): boolean {
 export type SessionChange = (change: Json) => void | Promise<void>;
 
 /**
+ * The operation a hook prepares, as the application's server is about to send it: where it is, and
+ * what its function will read.
+ */
+export interface OperationToPrepare {
+  readonly module: string;
+  readonly name: string;
+  /** As the operation will read them: copies, JSON as it crosses, a form as a FormData of its text entries. */
+  readonly args: readonly unknown[];
+}
+
+/**
+ * How the application prepares an operation on its own server (`prepareOperation` of
+ * `withReactiveState`, `--prepare-operation` of the compile): it runs once for a call, in the
+ * Server Action, before the authority is called, for a request that carries a session. It does not
+ * run where `requestSession` answers `null`, which the demo's cookie sessions do for no cookie
+ * alone:
+ * an empty or junk cookie is a session, and a session the authority then finds unknown has had its
+ * hook run before the 401. What it answers — JSON of 4 KiB at most, checked at run time (non-JSON
+ * is a `TypeError`), though typed `unknown` so that an interface-typed object is accepted —
+ * travels with the call, and the operation reads it with `prepared()` of `./server`; none where it
+ * answers `undefined`. An error it throws is the Server Action's: nothing is sent. It is the
+ * application's server's own context — a token only that server holds — and the
+ * authority keeps none of it.
+ */
+export type OperationPreparation = (operation: OperationToPrepare) => unknown;
+
+/**
  * What a stub runs an operation by: the build, and the application's session source, where it
  * signs its users in itself (`SessionSource`). A stub of the demo's sessions names the build alone.
  */
@@ -161,6 +190,8 @@ export interface OperatedBy {
   readonly session?: SessionSource | undefined;
   /** How the application applies the session change an operation asks for (`SessionChange`). */
   readonly sessionChange?: SessionChange | undefined;
+  /** How the application prepares the operation before it is sent (`OperationPreparation`). */
+  readonly prepareOperation?: OperationPreparation | undefined;
   /**
    * Whether the build keeps its roots in the deployment's cache (`prefetchCache: 'remote'`): an
    * operation that ran expires the session's at once (`revalidateTag` of a window of none), before
@@ -209,6 +240,51 @@ async function applied(
 }
 
 /**
+ * What the application's hook prepares for an operation, checked: JSON of `PREPARED_LIMIT` bytes at
+ * most, or `undefined` for none. The hook is handed copies of the arguments, so that what it does to
+ * them changes nothing that is sent. An error it throws is logged, and thrown as the Server Action's
+ * error; nothing is sent. The log names the operation and holds the hook's error, never what was
+ * prepared.
+ */
+async function preparedBy(
+  call: OperationCall,
+  prepare: OperationPreparation,
+): Promise<Json | undefined> {
+  const { module, name } = call;
+  const args = argumentsOf(
+    call.args.map((argument) =>
+      'json' in argument ? { json: structuredClone(argument.json) } : argument,
+    ),
+  );
+  let answer: unknown;
+  try {
+    answer = await prepare({ args, module, name });
+  } catch (error) {
+    // Next.js's control flow — `redirect()`, `notFound()` — is no failure to log.
+    unstable_rethrow(error);
+    // eslint-disable-next-line no-console -- logged, then thrown as the Server Action's error
+    console.error(
+      `The preparation of ${module}#${name} failed; the operation was not sent:`,
+      error,
+    );
+    throw error;
+  }
+  if (answer === undefined) {
+    return undefined;
+  }
+  const where = `The preparation of ${module}#${name}`;
+  // A value of the answer writes a byte of its text at least: more values than bytes is too large.
+  const json: Json = toJson(answer, where, PREPARED_LIMIT);
+  const bytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
+  if (bytes > PREPARED_LIMIT) {
+    throw new TypeError(
+      `${where} is ${String(bytes)} bytes of JSON, ${String(PREPARED_LIMIT)} at most.`,
+    );
+  }
+  return json;
+}
+
+/**
  * The error of a call to `module#name` the authority answered `failure` to: one of an outcome
  * unknown — it may have run — or a refusal, which says it did not.
  */
@@ -228,6 +304,20 @@ function operationError(of: {
   );
 }
 
+/** The call of `args` to `module#name`, prepared where the application's hook says to be. */
+async function callOf(
+  call: OperationCall,
+  session: SessionId,
+  prepare: OperationPreparation | undefined,
+): Promise<OperationCall> {
+  // No hook runs for a request of no session: the authority refuses it (401) before any operation.
+  if (session === null || prepare === undefined) {
+    return call;
+  }
+  const prepared = await preparedBy(call, prepare);
+  return prepared === undefined ? call : { ...call, prepared };
+}
+
 /**
  * Runs `name` of the `'use server'` module `module` in the authority with `args`, and answers what
  * it returned. Throws an `OperationError` when it was refused, or when whether it ran is unknown.
@@ -241,12 +331,13 @@ export async function operate(
   const {
     build,
     kept,
+    prepareOperation,
     session: source,
     sessionChange,
   } = typeof built === 'string' ? { build: built } : built;
   // The arguments share one count of values, as many as the authority's text of them could hold.
   const budget = jsonBudget(REQUEST_LIMITS.arguments);
-  const call: OperationCall = {
+  const encoded: OperationCall = {
     args: args.map((argument, index) => encodeArgument(argument, index, budget)),
     build,
     module,
@@ -254,6 +345,8 @@ export async function operate(
     operationId: crypto.randomUUID(),
   };
   const session = await requestSession(source);
+  // Prepared once: a resend below sends this call again, not a new preparation.
+  const call = await callOf(encoded, session, prepareOperation);
   const client = authority();
   let result = await client.operate(session, call);
   // Once an attempt's outcome was unknown, a later refusal does not say it never ran: the session

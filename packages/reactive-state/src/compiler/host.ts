@@ -26,6 +26,8 @@ export interface HostInput {
   readonly session?: string;
   /** The module and the export that applies a session change an operation asks for. */
   readonly sessionChange?: string;
+  /** The module and the export that prepares an operation on the application's server. */
+  readonly prepareOperation?: string;
   /** The private cache its roots render inside for a link's prefetch (`--prefetch`), where said. */
   readonly prefetch?: string;
   /** Where those roots are kept, `private` or `remote` (`--prefetch-cache`), where said. */
@@ -42,19 +44,37 @@ export function givenHost(given: {
   readonly database?: string | undefined;
   readonly session?: string | undefined;
   readonly sessionChange?: string | undefined;
+  readonly prepareOperation?: string | undefined;
   readonly prefetch?: string | undefined;
   readonly prefetchCache?: string | undefined;
   readonly share?: boolean | undefined;
 }): HostInput & { readonly database?: string } {
-  const { database, prefetch, prefetchCache, session, sessionChange, share } = given;
+  const { database, prefetch, prefetchCache, prepareOperation, session, sessionChange, share } =
+    given;
   return {
     ...(database !== undefined && { database }),
     ...(session !== undefined && { session }),
     ...(sessionChange !== undefined && { sessionChange }),
+    ...(prepareOperation !== undefined && { prepareOperation }),
     ...(prefetch !== undefined && { prefetch }),
     ...(prefetchCache !== undefined && { prefetchCache }),
     ...(share === false && { share: false }),
   };
+}
+
+/**
+ * The host options a compile's digest reads in one list, in the order it has always held them: what
+ * the digest says of where the roots a prefetch carries are kept it says beside this list, where
+ * said alone, so that a project that says nothing of it digests as it did before.
+ */
+export function hostDigest(options: HostInput): readonly (boolean | string | undefined)[] {
+  return [
+    options.session,
+    options.prefetch,
+    options.share,
+    options.sessionChange,
+    options.prepareOperation,
+  ];
 }
 
 /**
@@ -70,10 +90,17 @@ export function hostOf(options: HostInput): HostOptions {
     'session-change applier',
     '@/session#applySessionChange',
   );
+  const prepareOperation = namedBy(
+    options.prepareOperation,
+    '--prepare-operation',
+    'operation preparation',
+    '@/session#prepareOperation',
+  );
   const prefetch = options.prefetch === undefined ? undefined : prefetchOf(options.prefetch);
   const prefetchCache = prefetchCacheOf(options.prefetchCache, { prefetch, session });
   return {
     prefetch,
+    prepareOperation,
     session,
     sessionChange,
     ...(prefetchCache !== undefined && { prefetchCache }),
@@ -177,7 +204,7 @@ function refuseOutputTaken(app: AppInput): void {
   ].find((module) => module.id === REQUEST_SESSION);
   if (taken !== undefined) {
     throw new ReactiveCompileError(
-      `The compile writes the session source's re-export as \`${REQUEST_SESSION}\`, where this module's would be written (\`--session\`, \`--session-change\`): name the module otherwise.`,
+      `The compile writes the session source's re-export as \`${REQUEST_SESSION}\`, where this module's would be written (\`--session\`, \`--session-change\`, \`--prepare-operation\`): name the module otherwise.`,
       { fileName: taken.fileName, position: { character: 0, line: 0 } },
     );
   }
@@ -196,7 +223,9 @@ export function emitStubs(
 ): void {
   const session = app.host?.session;
   const sessionChange = app.host?.sessionChange;
-  const named = session !== undefined || sessionChange !== undefined;
+  const prepareOperation = app.host?.prepareOperation;
+  const named =
+    session !== undefined || sessionChange !== undefined || prepareOperation !== undefined;
   if (named) {
     refuseOutputTaken(app);
   }
@@ -212,6 +241,7 @@ export function emitStubs(
           ? {
               from,
               kept: app.host?.prefetchCache === 'remote',
+              prepareOperation: prepareOperation !== undefined,
               session: session !== undefined,
               sessionChange: sessionChange !== undefined,
             }
@@ -223,7 +253,7 @@ export function emitStubs(
     put(
       path.join(outDir, `${REQUEST_SESSION}.ts`),
       emitRequestSession(
-        { session, sessionChange },
+        { prepareOperation, session, sessionChange },
         header("the application's components", 'components'),
       ),
     );
