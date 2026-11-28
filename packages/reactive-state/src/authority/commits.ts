@@ -2,7 +2,7 @@ import { recordResource } from '../program.ts';
 import type { Database } from './database.ts';
 import { describeThrown } from './errors.ts';
 import type { Memo } from './memo.ts';
-import type { Commit, CommitEvent, CommitListener, Metrics } from './model.ts';
+import type { Commit, CommitEvent, CommitListener, Core, Metrics } from './model.ts';
 import type { PublicViews } from './public.ts';
 import type { Sessions } from './sessions.ts';
 import type { SharedViews } from './shared-views.ts';
@@ -19,6 +19,7 @@ interface CommitState {
   readonly publicViews: PublicViews;
   readonly memo: Memo;
   readonly listeners: ReadonlySet<CommitListener>;
+  readonly report: Core['report'];
 }
 
 export class Committer {
@@ -42,8 +43,11 @@ export class Committer {
       } catch (error) {
         // The authority's own log wherever it runs — stderr in Node, the object's log in workerd —
         // through the one writer both have.
-        // eslint-disable-next-line no-console
-        console.error(`A commit listener failed: ${describeThrown(error)}`);
+        this.#state.report(
+          error,
+          { kind: 'commit' },
+          `A commit listener failed: ${describeThrown(error)}`,
+        );
       }
     }
   }

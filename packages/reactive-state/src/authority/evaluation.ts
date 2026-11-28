@@ -58,6 +58,8 @@ export class Call {
    */
   #boundReads = 0;
   #lastBound: string | undefined;
+  /** Whether a fault of the call was told to the application's `onError` where it was met. */
+  reported = false;
 
   constructor(what: string, timeoutMs: number) {
     this.#what = what;
@@ -179,6 +181,11 @@ export class Call {
     return this.#fault === undefined ? asRefusal(thrown) : this.#fault.error;
   }
 
+  /** Whether the call has answered, or timed out: nothing it is asked is answered now. */
+  get settled(): boolean {
+    return !this.#open;
+  }
+
   close(): void {
     this.#open = false;
     clearTimeout(this.#timer);
@@ -277,6 +284,14 @@ export function renderEvaluation(
 }
 
 /**
+ * What the operation under way is told of its code's doings, which both of its evaluations carry.
+ */
+export type OperationHooks = Pick<
+  Evaluation,
+  'applicationConnection' | 'changeSession' | 'externalWrite'
+>;
+
+/**
  * What a server operation reads and writes outside its transaction: the committed records, noted
  * nowhere — nothing renders an operation again — and no write: those are made in `transaction`.
  * Each statement its code sends that may write a table of the application's own is told to
@@ -285,7 +300,7 @@ export function renderEvaluation(
 export function operationEvaluation(
   scope: Scope,
   transaction: <T>(body: () => Promise<T>) => Promise<T>,
-  externalWrite?: Evaluation['externalWrite'],
+  hooks: OperationHooks = {},
 ): Evaluation {
   const why = 'a server operation writes in its transaction, `db.transaction(async () => …)`';
   return {
@@ -293,7 +308,7 @@ export function operationEvaluation(
     delete: (table) => {
       throw misuse(scope, `db.${table}.delete`, why);
     },
-    externalWrite,
+    ...hooks,
     insert: (table) => {
       throw misuse(scope, `db.${table}.insert`, why);
     },
@@ -312,7 +327,7 @@ export function operationEvaluation(
 export function transactionEvaluation(
   scope: Scope,
   transaction: Transaction,
-  externalWrite?: Evaluation['externalWrite'],
+  hooks: OperationHooks = {},
 ): Evaluation {
   return {
     ...reads(scope, { source: transaction, tables: scope.tables, track: undefined }),
@@ -321,7 +336,7 @@ export function transactionEvaluation(
         transaction.delete(table, id);
       });
     },
-    externalWrite,
+    ...hooks,
     insert: (table, fields) => scope.call.answer(() => transaction.insert(table, fields)),
     transaction: () => {
       return Promise.reject(

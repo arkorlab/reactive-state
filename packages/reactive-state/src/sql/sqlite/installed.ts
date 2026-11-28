@@ -55,7 +55,7 @@ function rowsOf(result: unknown): readonly Readonly<Record<string, unknown>>[] {
 }
 
 /** The log the triggers write. */
-const LOG = '_rs_changes';
+export const LOG = '_rs_changes';
 /** An ASCII capital: SQLite's names and keywords are compared in ASCII's case alone. */
 const CAPITAL = /[A-Z]/gu;
 
@@ -221,17 +221,26 @@ const LOG_EVENTS = new Map([
 ]);
 /** The log's own words: a statement that appends to it, and the end of a trigger's statements. */
 const LOG_BODY = { end: ' END', log: 'INSERT INTO _rs_changes ' } as const;
-/** A word of a keyword, outside a trigger's strings and names: `FROM`, `RAISE`. */
-const WORDS = { from: /\bfrom\b/giu, raise: /\braise\b/iu } as const;
+/** Keywords outside a trigger's strings and names: `CONFLICT`, `FROM`, `IN`, `JOIN`, `RAISE`. */
+const WORDS = {
+  conflict: /\bconflict\b/iu,
+  from: /\bfrom\b/giu,
+  in: /\bin\b/iu,
+  join: /\bjoin\b/iu,
+  raise: /\braise\b/iu,
+} as const;
 
 /**
  * Whether `row` of `sqlite_schema` is a log's trigger — of another follow's of the table too, of
  * another declared name — and not the application's: of a log's name, of the head `capture.ts`
  * gives it (`CREATE TRIGGER "<name>" <time> ON "<table>" BEGIN`, of no `WHEN`), and of statements
  * that append to the log alone, reading the trigger's own table alone (`FROM "<table>" AS c`), of
- * no `RAISE` outside its strings and names. Of any other text, it is the application's.
+ * no `RAISE`, `JOIN`, `IN` or `CONFLICT` outside its strings and names (an upsert may update a log
+ * row, and a foreign key cascade change the row written), each of whose `FROM`s is the table's
+ * own: another source it reads, by a join, a comma or `IN`, may raise. Of any other text, it is
+ * the application's.
  */
-function logTrigger(row: Readonly<Record<string, unknown>>): boolean {
+export function logTrigger(row: Readonly<Record<string, unknown>>): boolean {
   const [name, table, sql] = [String(row['name']), String(row['tbl_name']), row['sql']];
   const event = LOG_TRIGGER.exec(name)?.groups?.['event'];
   const time = event === undefined ? undefined : LOG_EVENTS.get(event);
@@ -240,10 +249,17 @@ function logTrigger(row: Readonly<Record<string, unknown>>): boolean {
   if (!sql.endsWith(LOG_BODY.end)) return false;
   const body = sql.slice(head.length, -LOG_BODY.end.length);
   const bare = bareOf(body);
-  const own = `FROM ${quoted(table)} AS c `;
+  // Every `FROM` is of the table itself, `capture.ts`'s `FROM "<table>" AS c WHERE`: counted in the
+  // text, and in the bare text where strings and comments hold none and a name is blanked.
+  const own = `FROM ${quoted(table)} AS c WHERE `;
+  const froms = [...bare.matchAll(WORDS.from)].length;
   return (
     !WORDS.raise.test(bare) &&
-    [...bare.matchAll(WORDS.from)].length === body.split(own).length - 1 &&
+    !WORDS.join.test(bare) &&
+    !WORDS.in.test(bare) &&
+    !WORDS.conflict.test(bare) &&
+    froms === body.split(own).length - 1 &&
+    froms === bare.split(bareOf(own)).length - 1 &&
     bare.split(';').every((statement) => {
       const trimmed = statement.trim();
       return trimmed === '' || trimmed.startsWith(LOG_BODY.log);
@@ -345,7 +361,7 @@ function nameLength(text: string): number | undefined {
  * name's characters past ASCII too (`app after` of U+00A0 is one name), its keywords in ASCII's
  * case. Of any other text, a byte order mark's too, it may run before one.
  */
-function runsAfter(text: string): boolean {
+export function runsAfter(text: string): boolean {
   if (text.includes('\u{FEFF}')) return false;
   const sql = lower(text);
   const [head] = TRIGGER.head.exec(sql) ?? [];

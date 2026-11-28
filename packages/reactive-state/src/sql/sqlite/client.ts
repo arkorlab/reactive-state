@@ -15,7 +15,7 @@ import {
   wheresTogether,
 } from './reads.ts';
 import { type StatementRead, statementRead } from './scopes.ts';
-import { READS_ONLY, sentBy, sentToD1, sessionText } from './sent.ts';
+import { READS_ONLY, sentBy, sentCall, sessionText } from './sent.ts';
 import {
   COLLATED,
   type ColumnTypes,
@@ -447,6 +447,13 @@ const PREPARED = new WeakMap<WeakKey, Prepared>();
 /** The plans of each follow's statements, of every binding it is given: one per render, often. */
 const PLANS = new WeakMap<FollowedSqlite, SqlitePlans>();
 
+/** A method of D1's called with `args`, and what runs it. */
+interface Call<T> {
+  readonly name: PropertyKey;
+  readonly args: readonly unknown[];
+  readonly run: () => Promise<T>;
+}
+
 /**
  * `run`, D1's answer of `prepared`, in a render once what it reads is noted: of a statement that
  * writes nothing by its words (`readsBesidePlan`), as its plan is asked; of any other, after it,
@@ -456,11 +463,12 @@ async function noted<T>(
   prepared: readonly Prepared[],
   plans: SqlitePlans,
   binding: D1Binding,
-  run: () => Promise<T>,
+  call: Call<T>,
 ): Promise<T> {
+  const { args, name, run } = call;
   const note = tableReads();
   const texts = prepared.map((each) => each.sql);
-  if (note === undefined) return sentToD1(texts, run);
+  if (note === undefined) return sentCall(texts, { args, binding, name }, run);
   const refused = refusalOf(texts);
   if (refused !== undefined) {
     await note(() => Promise.reject(refused));
@@ -492,14 +500,15 @@ function tracked(prepared: Prepared, plans: SqlitePlans, binding: D1Binding): D1
   const { statement } = prepared;
   const answered = (name: string) => {
     return (...args: unknown[]): Promise<unknown> => {
-      return noted([prepared], plans, binding, async () => {
+      const run = async (): Promise<unknown> => {
         const answer: unknown = await Reflect.apply(
           Reflect.get(statement, name) as (...given: unknown[]) => unknown,
           statement,
           args,
         );
         return answer;
-      });
+      };
+      return noted([prepared], plans, binding, { args, name, run });
     };
   };
   const own: D1Statement & Record<string, unknown> = {
@@ -622,7 +631,7 @@ export function trackedD1<B extends D1Binding>(binding: B, followed: FollowedSql
               const texts = prepared.map(
                 (each, at) => each?.sql ?? sessionText(ownStatement(statements[at])),
               );
-              return sentToD1(texts, () =>
+              return sentCall(texts, { args: [statements], binding: target, name: key }, () =>
                 target.batch(statements.map((each) => ownStatement(each))),
               );
             }
@@ -632,7 +641,11 @@ export function trackedD1<B extends D1Binding>(binding: B, followed: FollowedSql
             noteFault(note, refused);
             return Promise.reject(refused);
           }
-          return noted(own, plans, target, () => target.batch(own.map((each) => each.statement)));
+          return noted(own, plans, target, {
+            args: [statements],
+            name: key,
+            run: () => target.batch(own.map((each) => each.statement)),
+          });
         };
       }
       const value: unknown = Reflect.get(target, key);

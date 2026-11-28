@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { SiteShape } from '../routing.ts';
 import { type DatabaseHost, takeHost } from './database-host.ts';
 import { diagnosticsEveryOf } from './diagnostics.ts';
+import { type FaultOptions, type Report, reporterOf } from './error-hook.ts';
 import { describeThrown } from './errors.ts';
 import { type AuthorityServer, createAuthorityServer } from './http.ts';
 import type { Application, ExternalOptions } from './model.ts';
@@ -20,7 +21,7 @@ const PRUNE_EVERY_MS = 600_000;
  * What the authority is started with: what a compile wrote for it (`<out>/authority.mts` exports
  * `buildId`, `programs`, `operations` and `database`), and where and how it serves.
  */
-export interface AuthorityOptions extends Application, ExternalOptions {
+export interface AuthorityOptions extends Application, ExternalOptions, FaultOptions {
   /** Where the database is kept (`app.sqlite`); in memory when not given. */
   readonly stateDir?: string;
   /** 0, or nothing, picks a free port. */
@@ -59,11 +60,14 @@ function siteFetch(origin: string): SiteFetch {
   };
 }
 
-/** What an authority's own work of its database comes to where it fails: no render waits on it. */
-function logged(what: string, work: Promise<unknown>): void {
+/**
+ * What an authority's own work of its database comes to where it fails: no render waits on it.
+ * `told` says the work reports its own failure to the hook (the tail's `poke` does), which is then
+ * not told again here, though the log stays where there is no hook.
+ */
+function logged(what: string, work: Promise<unknown>, report: Report, told = false): void {
   void work.catch((error: unknown) => {
-    // eslint-disable-next-line no-console
-    console.error(`${what} failed: ${describeThrown(error)}`);
+    report(error, { kind: 'log' }, `${what} failed: ${describeThrown(error)}`, told);
   });
 }
 
@@ -71,12 +75,16 @@ function logged(what: string, work: Promise<unknown>): void {
  * Follows the database of `host`, once the engine is made: each change it is told of has the log
  * read then rather than at the next interval, and the log is pruned. Answers what ends the pruning.
  */
-async function following(host: DatabaseHost, poke: () => Promise<unknown>): Promise<() => void> {
+async function following(
+  host: DatabaseHost,
+  poke: () => Promise<unknown>,
+  report: Report,
+): Promise<() => void> {
   await host.listen(() => {
-    logged('Reading the change log', poke());
+    logged('Reading the change log', poke(), report, true);
   });
   const pruning = setInterval(() => {
-    logged('Pruning the change log', host.prune());
+    logged('Pruning the change log', host.prune(), report);
   }, PRUNE_EVERY_MS);
   pruning.unref();
   return () => {
@@ -92,7 +100,7 @@ async function started(
   host: DatabaseHost | undefined,
 ): Promise<Authority> {
   const { buildId, clock, database, middleware, operations, port, programs, routes } = options;
-  const { externalPollMs, sessions, shareViews, stores, testMode, timeoutMs } = options;
+  const { externalPollMs, onError, sessions, shareViews, stores, testMode, timeoutMs } = options;
   const engine = new Engine({
     database,
     programs,
@@ -108,10 +116,14 @@ async function started(
     ...(filename !== undefined && { filename }),
     ...(clock !== undefined && { clock }),
     ...(timeoutMs !== undefined && { timeoutMs }),
+    ...(onError !== undefined && { onError }),
   });
   let unfollow: (() => void) | undefined;
   try {
-    unfollow = host === undefined ? undefined : await following(host, () => engine.poke());
+    unfollow =
+      host === undefined
+        ? undefined
+        : await following(host, () => engine.poke(), reporterOf(onError));
     const server = await createAuthorityServer({
       engine,
       internalToken: token,

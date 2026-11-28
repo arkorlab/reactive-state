@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import {
+  constants,
   DatabaseSync,
   type SQLInputValue,
   type SQLOutputValue,
@@ -24,7 +25,12 @@ import { parametersOf } from './where.ts';
 interface LocalResult {
   readonly results: readonly unknown[];
   readonly success: true;
-  readonly meta: { readonly changes: number; readonly last_row_id: number };
+  readonly meta: {
+    readonly changes: number;
+    readonly last_row_id: number;
+    readonly rows_written: number;
+    readonly changed_db: boolean;
+  };
 }
 
 /** A statement of D1's, bound to its values. */
@@ -108,6 +114,7 @@ const PRIMARY_CODES: Readonly<Record<number, string>> = {
   18: 'SQLITE_TOOBIG',
   19: 'SQLITE_CONSTRAINT',
   20: 'SQLITE_MISMATCH',
+  23: 'SQLITE_AUTH',
   25: 'SQLITE_RANGE',
 };
 /** The extended codes of a constraint's failure, which D1 names after the primary one. */
@@ -352,11 +359,20 @@ function statementOf(
   const counted = (): Counts => counts.get() as unknown as Counts;
   const answered = (): Answered => {
     return asD1(() => {
-      const before = counted().total;
+      const { id: lastId, total: before } = counted();
       const { columns, rows } = textRan(db, sql, bound);
       const { id, total } = counted();
       // Numbers, as D1 answers them: a key past 2^53 rounded.
-      const meta = { changes: Number(total - before), last_row_id: Number(id) };
+      const changes = Number(total - before);
+      // Miniflare also sets it when the database's size changed; this reads the counts and the
+      // last inserted row's id alone.
+      const changed = changes > 0 || id !== lastId;
+      const meta = {
+        changed_db: changed,
+        changes,
+        last_row_id: Number(id),
+        rows_written: changes,
+      };
       return { columns, meta, rows };
     });
   };
@@ -395,6 +411,12 @@ export function localD1(file: string): LocalD1 {
   const db = new DatabaseSync(file, { enableDoubleQuotedStringLiterals: true, limits: LIMITS });
   // The wait first: making the file WAL's takes a lock of it too.
   db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL');
+  // D1 authorizes no `ATTACH` or `DETACH`: another database's views and triggers are not its own.
+  db.setAuthorizer((action) => {
+    return action === constants.SQLITE_ATTACH || action === constants.SQLITE_DETACH
+      ? constants.SQLITE_DENY
+      : constants.SQLITE_OK;
+  });
   const counts = db.prepare('SELECT total_changes() AS total, last_insert_rowid() AS id');
   counts.setReadBigInts(true);
   let open = true;

@@ -277,16 +277,19 @@ export function emitServerFunctions(sessions = false): string {
   ].join('\n');
 }
 
+/** What a stub is handed of the host: where the re-exports are, and which of them there are. */
+export interface StubHost {
+  readonly from: string;
+  readonly session: boolean;
+  readonly sessionChange: boolean;
+}
+
 /**
  * The stub of a `'use server'` module (`<module id>.ts`): each function, run by the authority, typed
  * as the module's own — its parameters, and what it answers — through an import of its types alone,
  * so that a page's `<form action={publish.bind(null, id)}>` is checked as the original would be.
  */
-export function emitStub(
-  operation: OperationModule,
-  buildId: string,
-  sessionFrom?: string,
-): string {
+export function emitStub(operation: OperationModule, buildId: string, host?: StubHost): string {
   const source = unusedName(
     'source',
     (name) => name === 'operate' || operation.exports.includes(name),
@@ -296,10 +299,18 @@ export function emitStub(
     'session$',
     (name) => name === source || operation.exports.includes(name),
   );
+  const change = unusedName(
+    'sessionChange$',
+    (name) => name === source || name === session || operation.exports.includes(name),
+  );
   const by =
-    sessionFrom === undefined
+    host === undefined
       ? literal(buildId)
-      : `{ build: ${literal(buildId)}, session: ${session} }`;
+      : `{ ${[
+          `build: ${literal(buildId)}`,
+          ...(host.session ? [`session: ${session}`] : []),
+          ...(host.sessionChange ? [`sessionChange: ${change}`] : []),
+        ].join(', ')} }`;
   const mirrored = [...(operation.callables?.values() ?? [])].flatMap(
     (callable) => callable.written ?? [],
   );
@@ -340,7 +351,10 @@ export function emitStub(
     "'use server';",
     '',
     `import { operate } from '${NEXT}';`,
-    ...(sessionFrom === undefined ? [] : [`import { session as ${session} } from ${sessionFrom};`]),
+    ...(host?.session === true ? [`import { session as ${session} } from ${host.from};`] : []),
+    ...(host?.sessionChange === true
+      ? [`import { sessionChange as ${change} } from ${host.from};`]
+      : []),
     ...(needsOriginal ? [`import type * as ${source} from ${operation.written};`] : []),
     ...(mirrored.length === 0 ? [] : ['', `type ${result}<Value> = Promise<Awaited<Value>>;`]),
     ...functions,

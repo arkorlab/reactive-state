@@ -5,6 +5,7 @@ import { header } from './emit-authority.ts';
 import {
   emitRequestSession,
   type HostOptions,
+  type Named,
   namedOf,
   type PrefetchLife,
   prefetchOf,
@@ -20,8 +21,13 @@ import { ReactiveCompileError } from './errors.ts';
 
 /** What the host tells the compile, as the compile's options carry it. */
 export interface HostInput {
+  /** The module and the export its own sessions are read by (`--session`), where it has one. */
   readonly session?: string;
+  /** The module and the export that applies a session change an operation asks for. */
+  readonly sessionChange?: string;
+  /** The private cache its roots render inside for a link's prefetch (`--prefetch`), where said. */
   readonly prefetch?: string;
+  /** `false` where it shares nothing (`--no-share`). */
   readonly share?: boolean;
 }
 
@@ -32,13 +38,15 @@ export interface HostInput {
 export function givenHost(given: {
   readonly database?: string | undefined;
   readonly session?: string | undefined;
+  readonly sessionChange?: string | undefined;
   readonly prefetch?: string | undefined;
   readonly share?: boolean | undefined;
 }): HostInput & { readonly database?: string } {
-  const { database, prefetch, session, share } = given;
+  const { database, prefetch, session, sessionChange, share } = given;
   return {
     ...(database !== undefined && { database }),
     ...(session !== undefined && { session }),
+    ...(sessionChange !== undefined && { sessionChange }),
     ...(prefetch !== undefined && { prefetch }),
     ...(share === false && { share: false }),
   };
@@ -49,16 +57,32 @@ export function givenHost(given: {
  * prefetch's lifetime it names, each refused where it names none.
  */
 export function hostOf(options: HostInput): HostOptions {
-  const written = options.session;
-  const session = written === undefined ? undefined : namedOf(written);
-  if (session === undefined && written !== undefined) {
+  const session = namedBy(options.session, '--session', 'session source', '@/session#session');
+  const sessionChange = namedBy(
+    options.sessionChange,
+    '--session-change',
+    'session-change applier',
+    '@/session#applySessionChange',
+  );
+  const prefetch = options.prefetch === undefined ? undefined : prefetchOf(options.prefetch);
+  return { prefetch, session, sessionChange, ...(options.share === false && { share: false }) };
+}
+
+/** `written` as the module and export it names, or the refusal of option `flag`, which names `what`. */
+function namedBy(
+  written: string | undefined,
+  flag: string,
+  what: string,
+  example: string,
+): Named | undefined {
+  const named = written === undefined ? undefined : namedOf(written);
+  if (named === undefined && written !== undefined) {
     throw new ReactiveCompileError(
-      `\`${written}\` names no session source: it is \`<specifier>#<export>\`, as \`@/session#session\`.`,
-      { fileName: '--session', position: { character: 0, line: 0 } },
+      `\`${written}\` names no ${what}: it is \`<specifier>#<export>\`, as \`${example}\`.`,
+      { fileName: flag, position: { character: 0, line: 0 } },
     );
   }
-  const prefetch = options.prefetch === undefined ? undefined : prefetchOf(options.prefetch);
-  return { prefetch, session, ...(options.share === false && { share: false }) };
+  return named;
 }
 
 /**
@@ -88,7 +112,7 @@ function refuseOutputTaken(app: AppInput): void {
   ].find((module) => module.id === REQUEST_SESSION);
   if (taken !== undefined) {
     throw new ReactiveCompileError(
-      `The compile writes the session source's re-export as \`${REQUEST_SESSION}\`, where this module's would be written (\`--session\`): name the module otherwise.`,
+      `The compile writes the session source's re-export as \`${REQUEST_SESSION}\`, where this module's would be written (\`--session\`, \`--session-change\`): name the module otherwise.`,
       { fileName: taken.fileName, position: { character: 0, line: 0 } },
     );
   }
@@ -104,21 +128,32 @@ export function emitStubs(
   put: (file: string, text: string) => void,
 ): void {
   const session = app.host?.session;
-  if (session !== undefined) {
+  const sessionChange = app.host?.sessionChange;
+  const named = session !== undefined || sessionChange !== undefined;
+  if (named) {
     refuseOutputTaken(app);
   }
   for (const operation of app.operations) {
     const stub = path.join(outDir, `${operation.id}.ts`);
-    const from =
-      session === undefined
-        ? undefined
-        : relativeSpecifier(stub, path.join(outDir, REQUEST_SESSION));
-    put(stub, emitStub(operation, app.buildId, from));
+    const from = relativeSpecifier(stub, path.join(outDir, REQUEST_SESSION));
+    put(
+      stub,
+      emitStub(
+        operation,
+        app.buildId,
+        named
+          ? { from, session: session !== undefined, sessionChange: sessionChange !== undefined }
+          : undefined,
+      ),
+    );
   }
-  if (session !== undefined) {
+  if (named) {
     put(
       path.join(outDir, `${REQUEST_SESSION}.ts`),
-      emitRequestSession(session, header("the application's components", 'components')),
+      emitRequestSession(
+        { session, sessionChange },
+        header("the application's components", 'components'),
+      ),
     );
   }
 }

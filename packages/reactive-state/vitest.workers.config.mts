@@ -55,6 +55,9 @@ export default defineConfig({
           // The same, whose storage fails to arm the alarm of its first prune as it starts.
           // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
           ARM_FAILS: { className: 'ArmFailsAuthority', useSQLite: true },
+          // An application whose render fails, and an `onError` that notes the env it is given.
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
+          REPORTING: { className: 'ReportingAuthority', useSQLite: true },
         },
         d1Databases: ['REACTIVE_D1'],
         bindings: {

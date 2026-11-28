@@ -44,7 +44,7 @@ export const ZeroConfigAuthority = authorityObject({
 });
 
 /** How long the log of the slow start's database takes to make. */
-export const SLOW_OPEN_MS = 300;
+const SLOW_OPEN_MS = 300;
 /** Whether the slow start's log was made, by its host's own word: before a first call answered? */
 export const slowStart = { made: false };
 

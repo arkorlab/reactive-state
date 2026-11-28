@@ -22,9 +22,10 @@ import { verifySubscription } from './bindings.ts';
 import { Committer } from './commits.ts';
 import { Database } from './database.ts';
 import { Diagnostics } from './diagnostics.ts';
+import { held, reporterOf } from './error-hook.ts';
 import { assertId, refusal } from './errors.ts';
 import { timeoutOf } from './evaluation.ts';
-import { externalTailOf, readAfterOperation } from './external-engine.ts';
+import { afterOperation, externalTailOf } from './external-engine.ts';
 import { type ExternalTail, pollIntervalOf } from './external-tail.ts';
 import { storesOf } from './external.ts';
 import { writeField } from './fields.ts';
@@ -76,6 +77,8 @@ const BOOT_BYTES = 32;
 
 // Before the authority’s caller loads its application modules.
 watchUntracked();
+
+const compare = (a: string, b: string): number => a.localeCompare(b);
 
 function buildMismatch(): Error {
   return refusal(HTTP_CONFLICT, BUILD_MISMATCH, 'The application was updated. Reload the page.');
@@ -192,6 +195,7 @@ export class AuthorityEngine {
       memo: this.#memo,
       metrics: this.#metrics,
       registry: this.#registry,
+      report: reporterOf(options.onError),
       routes,
       secret: this.#secret,
       current: (session) => {
@@ -226,6 +230,7 @@ export class AuthorityEngine {
       memo: this.#memo,
       metrics: this.#metrics,
       publicViews: this.#public,
+      report: this.#core.report,
       sessions: this.#sessions,
       shared: this.#shared,
       tables: this.#tables,
@@ -235,6 +240,7 @@ export class AuthorityEngine {
       everyMs: externalPollMs,
       host: options.externalHost,
       readTimeoutMs: timeoutMs,
+      report: this.#core.report,
       // What a store's log says changed is announced as a commit is, and writes none of its records.
       ingest: async (rows) => {
         await this.#run(() => {
@@ -268,15 +274,11 @@ export class AuthorityEngine {
   }
 
   #session(id: unknown): Session {
-    const session = this.#sessionOrNone(id);
+    const session = this.#sessions.resolve(id);
     if (session === undefined) {
       throw signInFirst();
     }
     return session;
-  }
-
-  #sessionOrNone(id: unknown): Session | undefined {
-    return this.#sessions.resolve(id);
   }
 
   /**
@@ -315,10 +317,7 @@ export class AuthorityEngine {
     const operations = new Map<string, readonly string[]>();
     for (const [module, exports] of this.#registry.operations) {
       const names = Object.keys(exports).filter((name) => typeof exports[name] === 'function');
-      operations.set(
-        module,
-        names.toSorted((a, b) => a.localeCompare(b)),
-      );
+      operations.set(module, names.toSorted(compare));
     }
     return operations;
   }
@@ -395,7 +394,7 @@ export class AuthorityEngine {
     }
     const { component, props } = root;
     return this.#run(async () => {
-      const session = this.#sessionOrNone(sessionId);
+      const session = this.#sessions.resolve(sessionId);
       const view =
         session === undefined
           ? statusView(this.#core, 'unauthenticated')
@@ -419,7 +418,7 @@ export class AuthorityEngine {
     if (shared.build !== this.#registry.buildId) {
       throw buildMismatch();
     }
-    return this.#run(() => this.#shared.render(shared, this.#sessionOrNone(sessionId)));
+    return this.#run(() => this.#shared.render(shared, this.#sessions.resolve(sessionId)));
   }
 
   /** A route's gate's answer to a request for its page (`GateRequest`). */
@@ -435,7 +434,9 @@ export class AuthorityEngine {
    */
   async guardRoute(sessionId: unknown, request: unknown): Promise<GuardAnswer> {
     const routed = guardedRouteOf(this.#core, guardRequestOf(request));
-    return this.#run(async () => routeGuards(this.#core, this.#sessionOrNone(sessionId), routed));
+    return this.#run(async () =>
+      routeGuards(this.#core, this.#sessions.resolve(sessionId), routed),
+    );
   }
 
   /**
@@ -503,14 +504,14 @@ export class AuthorityEngine {
     const toRow = (): void => {
       target.row = true;
     };
+    // Its faults are told once the wait below is over: a fault's answer is the error itself.
+    const told = held(this.#core);
     try {
-      return await this.#run(async () => writeField(this.#core, sessionId, operation, toRow));
+      return await this.#run(async () => writeField(told.core, sessionId, operation, toRow));
     } finally {
       // The application's triggers logged the row: what read it by other keys than its condition
       // names follows the log, whose read waits for the queue this write held.
-      if (target.row) {
-        await readAfterOperation(this.#tail);
-      }
+      await afterOperation(this.#tail, target.row, told.flush);
     }
   }
 
@@ -537,16 +538,17 @@ export class AuthorityEngine {
       return (operation as (...args: readonly unknown[]) => unknown)(...args);
     };
     let receipt: OperationReceipt | undefined;
+    // Its faults are told once the wait below is over: a fault's answer is the error itself.
+    const told = held(this.#core);
     try {
-      receipt = await this.#run(async () => runOperation(this.#core, sessionId, call, running));
+      receipt = await this.#run(async () => runOperation(told.core, sessionId, call, running));
       return receipt;
     } finally {
       // An answer again by its id reads it too: the first may not have read it yet, or was lost.
-      if ((code.ran || receipt?.deduplicated === true) && this.#external) {
-        // The operation may have written an external table by the application's own SQL, though
-        // it failed after: the page its answer renders again reads after the log told of it.
-        await readAfterOperation(this.#tail);
-      }
+      // The operation may have written an external table by the application's own SQL, though it
+      // failed after: the page its answer renders again reads after the log told of it.
+      const read = code.ran || receipt?.deduplicated === true;
+      await afterOperation(this.#tail, read && this.#external, told.flush);
     }
   }
 

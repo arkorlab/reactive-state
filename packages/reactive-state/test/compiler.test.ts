@@ -4,7 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { API } from 'typescript/sync';
-import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 
 import { type Compiled, compileApp, openTypeScript, writeOutputs } from '../src/compiler/index.ts';
 import { PROTOCOL_VERSION } from '../src/program.ts';
@@ -1151,26 +1151,38 @@ describe('its command line', () => {
     CLI_TIMEOUT_MS,
   );
 
-  it('reports every refusal, and writes nothing', async () => {
-    const editor = await source('components/todo-editor.reactive.tsx');
-    const row = await source('components/todo-row.reactive.tsx');
-    const app = await application({
-      'components/todo-editor.reactive.tsx': variant(editor, '<p>{status}</p>', '<p>{user.id}</p>'),
-      'components/todo-row.reactive.tsx': variant(
-        row,
-        "import Link from 'next/link';",
-        "import Link from './link';",
-      ),
-    });
-    apps.push(app);
-    const ran = cli(app.src, '--out', app.out, '--app', app.appDir, '--database', '@/db#db');
+  describe('a compile that refuses components', () => {
+    let app: Application;
 
-    expect(ran.status).toBe(1);
-    expect(ran.stderr).toContain('components/todo-editor.reactive.tsx:');
-    expect(ran.stderr).toContain('`user` is computed in the server part');
-    expect(ran.stderr).toContain('components/todo-row.reactive.tsx:');
-    expect(ran.stderr).toContain('`./link` is a relative path');
-    expect(existsSync(app.out)).toBe(false);
+    // Fixture copying and source edits have their own setup lifecycle, before the CLI runs.
+    beforeEach(async () => {
+      const editor = await source('components/todo-editor.reactive.tsx');
+      const row = await source('components/todo-row.reactive.tsx');
+      app = await application({
+        'components/todo-editor.reactive.tsx': variant(
+          editor,
+          '<p>{status}</p>',
+          '<p>{user.id}</p>',
+        ),
+        'components/todo-row.reactive.tsx': variant(
+          row,
+          "import Link from 'next/link';",
+          "import Link from './link';",
+        ),
+      });
+      apps.push(app);
+    });
+
+    it('reports every refusal, and writes nothing', () => {
+      const ran = cli(app.src, '--out', app.out, '--app', app.appDir, '--database', '@/db#db');
+
+      expect(ran.status).toBe(1);
+      expect(ran.stderr).toContain('components/todo-editor.reactive.tsx:');
+      expect(ran.stderr).toContain('`user` is computed in the server part');
+      expect(ran.stderr).toContain('components/todo-row.reactive.tsx:');
+      expect(ran.stderr).toContain('`./link` is a relative path');
+      expect(existsSync(app.out)).toBe(false);
+    });
   });
 
   it('refuses a database it cannot name', async () => {

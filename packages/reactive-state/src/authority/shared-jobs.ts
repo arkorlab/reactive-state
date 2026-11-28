@@ -3,10 +3,12 @@ import type { SharedEvent } from '../routing.ts';
 import { ArtifactAsks } from './artifact-asks.ts';
 import { digest } from './canonical.ts';
 import { Dependencies } from './dependencies.ts';
-import { describeThrown } from './errors.ts';
+import { reporterOf } from './error-hook.ts';
+import { describeThrown, isAuthorityError } from './errors.ts';
 import { etagOf } from './gate-answers.ts';
 import type { Core } from './model.ts';
-import type { Candidate, Entry, Rendering } from './shared-entry.ts';
+import { pause } from './pause.ts';
+import type { Candidate, Entry, EvaluationFault, Rendering } from './shared-entry.ts';
 import {
   fetchArtifact,
   type GeneratedArtifact,
@@ -51,7 +53,7 @@ interface Callbacks {
    */
   readonly current: (entry: Entry) => boolean;
   /** In the queue: `entry` evaluated, and what follows of it applied. */
-  readonly evaluate: (entry: Entry) => Promise<void>;
+  readonly evaluate: (entry: Entry, fault: EvaluationFault) => Promise<void>;
   /** In the queue: `entry` made the request's, for `reason`, as an evaluation that finds it so does. */
   readonly privatize: (entry: Entry, reason: string) => void;
   /** In the queue: `candidate`'s artifacts published, where it is still the view's candidate. */
@@ -95,23 +97,6 @@ const MAX_FAULT_RETRY_MS = 60_000;
 /** The artifacts of a generation, in the order they are made. */
 const PROFILES: readonly Profile[] = ['document', 'rsc'];
 
-/** Waits `milliseconds`, or until `signal` aborts, as the authority closes: no timer left behind. */
-function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(done, milliseconds);
-    signal.addEventListener('abort', done, { once: true });
-    function done(): void {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    }
-  });
-}
-
 export class SharedJobs {
   readonly #host: SharedJobsHost;
   readonly #callbacks: Callbacks;
@@ -152,18 +137,24 @@ export class SharedJobs {
    * — nothing held it then — is evaluated no more.
    */
   async #settle(entry: Entry, generate: boolean): Promise<void> {
+    const fault: EvaluationFault = { told: false };
     try {
       await this.#host.run(async () => {
         const unsettled = entry.status === 'dirty' || entry.status === 'new';
         if (unsettled && this.#callbacks.current(entry)) {
-          await this.#callbacks.evaluate(entry);
+          await this.#callbacks.evaluate(entry, fault);
         }
       });
     } catch (error) {
       if (!this.#stopped) {
-        // eslint-disable-next-line no-console
-        console.error(
+        // A fault the render reported is the hook's already, and not told again.
+        // A refusal is told to nobody: its log is written whether or not there is a hook.
+        const report = isAuthorityError(error) ? reporterOf(undefined) : this.#host.core.report;
+        report(
+          error,
+          { kind: 'shared-view' },
           `A shared view of ${entry.route.route} failed to render: ${describeThrown(error)}`,
+          fault.told,
         );
       }
       return;
@@ -288,8 +279,11 @@ export class SharedJobs {
         // once (`fault`), and a later request, or a commit, tries again — never one of them over and
         // over until its deadline.
         moved = false;
-        // eslint-disable-next-line no-console
-        console.error(`A shared view's artifact failed: ${describeThrown(error)}`);
+        this.#host.core.report(
+          error,
+          { kind: 'shared-view' },
+          `A shared view's artifact failed: ${describeThrown(error)}`,
+        );
       } finally {
         this.#making.delete(key);
         this.#release(key, moved);

@@ -6,7 +6,7 @@ import { type Assembly, assemble } from './assemble.ts';
 import { type BindingClaims, signBinding } from './bindings.ts';
 import { digest } from './canonical.ts';
 import { Dependencies } from './dependencies.ts';
-import { AuthorityError, refusal } from './errors.ts';
+import { AuthorityError, isAuthorityError, refusal } from './errors.ts';
 import { Call, type Scope } from './evaluation.ts';
 import { admittedGuard, type InitialGuardAdmission } from './guard-admissions.ts';
 import { guardsOf, runGuards } from './guards.ts';
@@ -100,6 +100,7 @@ export function rendererOf(
     definition: core.definition,
     evaluatedBy: core.evaluatedBy,
     instances: 0,
+    report: core.report,
     memo: core.memo,
     programs: core.registry.programs,
     scope: { ...scopeOf(core, call, session), streamed },
@@ -160,6 +161,7 @@ export async function guardedBy(
   const guarded = await runGuards(core, renderer, guards, {
     dependencies,
     params: routed.params,
+    route: routed.route.route,
   });
   return { dependencies, refused: guarded.kind !== 'pass' };
 }
@@ -225,6 +227,9 @@ export async function viewOf(
   } catch (error) {
     // A fault is the render's outcome, whatever came after it.
     const thrown = call.fault === undefined ? error : call.fault.error;
+    if (!isAuthorityError(thrown)) {
+      core.report(thrown, { component: root.component, kind: 'render' }, undefined, call.reported);
+    }
     if (thrown instanceof AuthorityError && thrown.status === HTTP_UNAUTHORIZED) {
       return statusView(core, 'unauthenticated');
     }

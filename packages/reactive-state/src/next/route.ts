@@ -1,7 +1,13 @@
 import type { Failure } from '../client/index.ts';
 import { type Result, SESSION_COOKIE } from '../program.ts';
 import { claimedView, DELIVER_PATH } from '../routing.ts';
-import { HTTP_BAD_REQUEST, HTTP_FORBIDDEN, HTTP_NOT_FOUND, HTTP_UNAUTHORIZED } from '../status.ts';
+import {
+  HTTP_BAD_REQUEST,
+  HTTP_FORBIDDEN,
+  HTTP_NOT_FOUND,
+  HTTP_PAYLOAD_TOO_LARGE,
+  HTTP_UNAUTHORIZED,
+} from '../status.ts';
 import { authority, refused, routeSession, sessionOf } from './authority.ts';
 import { chainAround, throughChain } from './chain.ts';
 import { deliver, type Registry } from './deliver.ts';
@@ -39,6 +45,8 @@ const HTTP_METHOD_NOT_ALLOWED = 405;
 const HTTP_REQUEST_TIMEOUT = 408;
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_SERVER_ERROR = 500;
+/** The most bytes of UTF-8 a sign-in request's body may carry: 4 KiB. */
+const MAX_SESSION_BODY_BYTES = 4096;
 /** How long the browser keeps a session: as long as the authority does, a day. */
 const SESSION_SECONDS = 86_400;
 const NO_STORE = { 'Cache-Control': 'no-store' };
@@ -107,11 +115,50 @@ function foreign(request: Request): Failure | undefined {
     : refused(HTTP_FORBIDDEN, 'ORIGIN_REJECTED', 'The origin does not match.');
 }
 
-/** A request's JSON body; an empty body is an empty object, and one that is not JSON is refused. */
+function tooLarge(): Failure {
+  return refused(HTTP_PAYLOAD_TOO_LARGE, 'TOO_LARGE', 'The request is too large.');
+}
+
+/**
+ * `stream` decoded as UTF-8 text, or `undefined` once its bytes exceed `MAX_SESSION_BODY_BYTES`
+ * (cancelling `stream` immediately without reading further).
+ */
+async function readBoundedText(stream: ReadableStream<Uint8Array>): Promise<string | undefined> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let length = 0;
+  let text = '';
+  try {
+    for (let read = await reader.read(); !read.done; read = await reader.read()) {
+      length += read.value.byteLength;
+      if (length > MAX_SESSION_BODY_BYTES) {
+        await reader.cancel();
+        return undefined;
+      }
+      text += decoder.decode(read.value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * A sign-in request's JSON body, bounded to `MAX_SESSION_BODY_BYTES`; an empty body is an empty
+ * object, a larger one is refused (413), and one that is not JSON is refused (400).
+ */
 async function bodyOf(request: Request): Promise<Result<Partial<Record<string, unknown>>>> {
+  const stream = request.body;
+  if (Number(request.headers.get('content-length')) > MAX_SESSION_BODY_BYTES) {
+    await stream?.cancel();
+    return tooLarge();
+  }
   let body: unknown;
   try {
-    const text = await request.text();
+    const text = stream === null ? '' : await readBoundedText(stream);
+    if (text === undefined) {
+      return tooLarge();
+    }
     body = JSON.parse(text === '' ? '{}' : text);
   } catch {
     return refused(HTTP_BAD_REQUEST, 'INVALID_JSON', 'The body is not JSON.');

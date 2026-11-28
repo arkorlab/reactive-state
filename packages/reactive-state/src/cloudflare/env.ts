@@ -17,7 +17,7 @@ export interface AuthorityEnv {
 }
 
 /** A bypass of the site's access protection: the header it goes in, and its value. */
-export interface SiteBypass {
+interface SiteBypass {
   readonly header: string;
   readonly value: string;
 }

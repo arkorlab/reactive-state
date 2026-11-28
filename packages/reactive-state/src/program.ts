@@ -661,6 +661,12 @@ export interface OperationReceipt {
   readonly operationId: string;
   readonly committedRevision: number | null;
   readonly result: Json;
+  /**
+   * The change of the application's own session the operation asked for (`changeSession`), kept
+   * with its answer: a resend answers the same. None of an operation that asked for none, nor of
+   * any that did not succeed; an answer of an older authority has none.
+   */
+  readonly sessionChange?: Json;
   readonly deduplicated: boolean;
 }
 

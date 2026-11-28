@@ -458,6 +458,187 @@ export function readsAlone(sql: string): boolean {
   );
 }
 
+/** The words that begin what follows a `RETURNING` list, or are SQLite's own: never an alias. */
+const NOT_ALIASES = new Set([
+  'except',
+  'from',
+  'group',
+  'having',
+  'intersect',
+  'join',
+  'limit',
+  'offset',
+  'on',
+  'order',
+  'raise',
+  'returning',
+  'select',
+  'union',
+  'values',
+  'where',
+  'window',
+]);
+
+/** Whether `token` is a plain name: a quoted name, or a word that begins no clause of SQLite's. */
+function plainName(token: Token | undefined): boolean {
+  return token?.kind === 'name' || (token?.kind === 'word' && !NOT_ALIASES.has(token.text));
+}
+
+/** The index past the column at `at` of `tokens`: `*`, `name`, `name.*` or `name.name`. */
+function pastColumn(tokens: readonly Token[], at: number): number | undefined {
+  if (isChar(tokens[at], '*')) return at + 1;
+  if (!plainName(tokens[at])) return undefined;
+  if (!isChar(tokens[at + 1], '.')) return at + 1;
+  const [qualified, past] = [at + 2, at + 2 + 1];
+  if (isChar(tokens[qualified], '*')) return past;
+  return plainName(tokens[qualified]) ? past : undefined;
+}
+
+/** The index past the alias at `at` of `tokens`, `AS name` or a bare name; none of `AS` alone. */
+function pastAlias(tokens: readonly Token[], at: number): number | undefined {
+  if (isWord(tokens[at], 'as')) return plainName(tokens[at + 1]) ? at + 2 : undefined;
+  return plainName(tokens[at]) ? at + 1 : at;
+}
+
+/**
+ * Whether `sql` has a `RETURNING` clause at its top level whose list is plain, by its tokens: items
+ * of `*`, `name`, `name.*` or `name.name`, each optionally followed by `AS name` or a bare alias,
+ * separated by commas, and nothing after the list. Anything else — a function, a parenthesis, an
+ * operator, a literal, an `ORDER BY` — is read not: SQLite compiles `RETURNING` as a trigger,
+ * whose expressions may `RAISE(IGNORE)` and end the statement after a row is written, before any
+ * is returned.
+ */
+export function plainReturning(sql: string): boolean {
+  const tokens = plainTokensOf(sql);
+  if (tokens === undefined) return false;
+  let depth = 0;
+  const found = tokens.findIndex((token) => {
+    if (isChar(token, '(')) depth += 1;
+    if (isChar(token, ')')) depth -= 1;
+    return depth === 0 && isWord(token, 'returning');
+  });
+  if (found === -1) return false;
+  let at = found + 1;
+  for (;;) {
+    const past = pastColumn(tokens, at);
+    const aliased = past === undefined ? undefined : pastAlias(tokens, past);
+    if (aliased === undefined) return false;
+    at = aliased;
+    if (at >= tokens.length || (isChar(tokens[at], ';') && at + 1 === tokens.length)) return true;
+    if (!isChar(tokens[at], ',')) return false;
+    at += 1;
+  }
+}
+
+/** The words of a statement whose change counts SQLite keeps: the writes of rows. */
+const COUNTED = new Set(['delete', 'insert', 'replace', 'update']);
+
+/**
+ * Whether `sql` is one statement of rows written, which SQLite's change counts are of: it begins
+ * with `INSERT`, `UPDATE`, `DELETE` or `REPLACE`, or with a `WITH` clause and one of them past its
+ * tables, read by tokens, and it names no `pragma_` function, which can write uncounted from a
+ * subquery. `CREATE`, `DROP`, `ALTER`, `PRAGMA` and the rest count none.
+ */
+export function countsRows(sql: string): boolean {
+  const tokens = plainTokensOf(sql);
+  if (tokens === undefined || !soleStatement(sql) || namesPragmaFunction(sql)) return false;
+  const start = statementStart(tokens);
+  const verb = start === undefined ? undefined : tokens[start];
+  return verb?.kind === 'word' && COUNTED.has(verb.text);
+}
+
+/**
+ * Whether `sql` may drop a row after a `BEFORE` trigger ran for it: a conflict resolved by
+ * `OR IGNORE`, `OR REPLACE` or the like, or an `ON CONFLICT` clause, which leaves `RETURNING`
+ * empty of a row a trigger wrote beside. Any `OR` before a word of a resolution counts.
+ */
+export function mayDropRow(sql: string): boolean {
+  const tokens = plainTokensOf(sql);
+  if (tokens === undefined) return true;
+  return tokens.some((token, at) => {
+    const next = tokens[at + 1];
+    if (isWord(token, 'on')) return isWord(next, 'conflict');
+    if (!isWord(token, 'or')) return false;
+    return ['abort', 'fail', 'ignore', 'replace', 'rollback'].some((word) => isWord(next, word));
+  });
+}
+
+/** The name `token` is, plain or quoted: `t`, `"t"`; none of any other token. */
+function nameOf(token: Token | undefined): string | undefined {
+  return token?.kind === 'word' || token?.kind === 'name' ? token.text : undefined;
+}
+
+/**
+ * The table `sql`, a statement of rows written, writes, by its tokens: of `INSERT [OR x] INTO`,
+ * `REPLACE INTO`, `UPDATE [OR x]` or `DELETE FROM`, past a leading `WITH …` clause read as SQLite
+ * reads it (`WITH [RECURSIVE] name [(columns)] AS [NOT] [MATERIALIZED] (…), …`). A name is plain
+ * or quoted, in the `main` schema or none; a name of any other schema, or none found, gives none.
+ */
+export function writtenTable(sql: string): string | undefined {
+  const tokens = plainTokensOf(sql);
+  const start = tokens === undefined ? undefined : statementStart(tokens);
+  const verb = start === undefined ? undefined : tokens?.[start];
+  if (tokens === undefined || start === undefined || verb?.kind !== 'word') return undefined;
+  if (!COUNTED.has(verb.text)) return undefined;
+  let at = start + 1;
+  if ((verb.text === 'update' || verb.text === 'insert') && isWord(tokens[at], 'or')) at += 2;
+  const before = verb.text === 'delete' ? 'from' : 'into';
+  if (verb.text !== 'update') {
+    if (!isWord(tokens[at], before)) return undefined;
+    at += 1;
+  }
+  const first = nameOf(tokens[at]);
+  if (first === undefined || !isChar(tokens[at + 1], '.')) return first;
+  return folded(first) === 'main' ? nameOf(tokens[at + 2]) : undefined;
+}
+
+/** The index past the parenthesis at `at` of `tokens` and what it encloses; none if it never closes. */
+function pastParenthesis(tokens: readonly Token[], at: number): number | undefined {
+  if (!isChar(tokens[at], '(')) return undefined;
+  let depth = 0;
+  for (let index = at; index < tokens.length; index += 1) {
+    if (isChar(tokens[index], '(')) depth += 1;
+    if (isChar(tokens[index], ')')) depth -= 1;
+    if (depth === 0) return index + 1;
+  }
+  return undefined;
+}
+
+/**
+ * The index past the common table that begins at `at` of `tokens`: `name [(columns)] AS [NOT]
+ * [MATERIALIZED] (…)`; none where it is malformed.
+ */
+function pastTable(tokens: readonly Token[], at: number): number | undefined {
+  if (nameOf(tokens[at]) === undefined) return undefined;
+  let index = at + 1;
+  if (isChar(tokens[index], '(')) {
+    const columns = pastParenthesis(tokens, index);
+    if (columns === undefined) return undefined;
+    index = columns;
+  }
+  if (!isWord(tokens[index], 'as')) return undefined;
+  index += 1;
+  if (isWord(tokens[index], 'not')) index += 1;
+  if (isWord(tokens[index], 'materialized')) index += 1;
+  return pastParenthesis(tokens, index);
+}
+
+/**
+ * Where the main statement begins in `tokens`, past a `WITH [RECURSIVE]` clause and its tables
+ * read as SQLite does; none where the clause is malformed.
+ */
+function statementStart(tokens: readonly Token[]): number | undefined {
+  if (!isWord(tokens[0], 'with')) return 0;
+  let index = isWord(tokens[1], 'recursive') ? 2 : 1;
+  for (;;) {
+    const past = pastTable(tokens, index);
+    if (past === undefined) return undefined;
+    index = past;
+    if (!isChar(tokens[index], ',')) return index;
+    index += 1;
+  }
+}
+
 /**
  * The first word of `sql`, in lower case, past its spaces and comments; none where it begins with
  * no word. A `PRAGMA` is one a render runs not: of a flag (`case_sensitive_like`), it sets the

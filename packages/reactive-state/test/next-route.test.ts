@@ -86,6 +86,25 @@ function segments(...path: readonly string[]): { readonly params: Promise<{ path
   return { params: Promise.resolve({ path: [...path] }) };
 }
 
+/** A body stream that hands out `chunks` one pull at a time. */
+function chunkedOf(chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> {
+  let index = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        const next = chunks[index];
+        index += 1;
+        if (next === undefined) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(next);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
 describe('the route a compile writes', () => {
   beforeEach(() => {
     hoisted.client = {
@@ -264,6 +283,90 @@ describe('the route a compile writes', () => {
       );
 
       expect([foreign.status, broken.status, nobody.status]).toStrictEqual([403, 400, 400]);
+      expect(hoisted.client['login']).not.toHaveBeenCalled();
+    });
+
+    it('accepts a 4096-byte sign-in body and decodes multi-byte UTF-8 split across chunks', async () => {
+      hoisted.client['login']?.mockResolvedValue({
+        ok: true,
+        value: { sessionId: 'session-b', userId: 'bob' },
+      });
+      const prefix = '{"user":"bob","pad":"';
+      const suffix = '"}';
+      const exact = `${prefix}${'x'.repeat(4096 - prefix.length - suffix.length)}${suffix}`;
+      const splitBytes = new TextEncoder().encode('{"user":"b\u{F6}b"}');
+      const body = chunkedOf([splitBytes.subarray(0, 11), splitBytes.subarray(11)]);
+      const init = { body, duplex: 'half', headers: { origin: ORIGIN }, method: 'POST' };
+
+      const atLimit = await post(
+        request('session', { body: exact, method: 'POST' }),
+        segments('session'),
+      );
+      const splitUtf8 = await post(
+        new Request(`${ORIGIN}/api/reactive-state/session`, init),
+        segments('session'),
+      );
+
+      expect([atLimit.status, splitUtf8.status]).toStrictEqual([200, 200]);
+      expect(hoisted.client['login']?.mock.calls).toStrictEqual([['bob'], ['b\u{F6}b']]);
+    });
+
+    it('refuses a sign-in declaring Content-Length above 4096 bytes without reading its stream', async () => {
+      const pull = vi.fn();
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({ cancel, pull }, { highWaterMark: 0 });
+      const init = {
+        body,
+        duplex: 'half',
+        headers: { 'content-length': '4097', origin: ORIGIN },
+        method: 'POST',
+      };
+
+      const response = await post(
+        new Request(`${ORIGIN}/api/reactive-state/session`, init),
+        segments('session'),
+      );
+
+      expect(response.status).toBe(413);
+      await expect(response.json()).resolves.toStrictEqual({
+        code: 'TOO_LARGE',
+        error: 'The request is too large.',
+      });
+      expect(pull).not.toHaveBeenCalled();
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(hoisted.client['login']).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { headers: { origin: ORIGIN }, name: 'chunked without content-length' },
+      { headers: { 'content-length': '16', origin: ORIGIN }, name: 'spoofed small content-length' },
+    ])('aborts a sign-in stream exceeding 4096 bytes mid-transfer ($name)', async ({ headers }) => {
+      let pulls = 0;
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>(
+        {
+          cancel,
+          pull(controller) {
+            pulls += 1;
+            controller.enqueue(new Uint8Array(2048).fill(0x20));
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const init = { body, duplex: 'half', headers, method: 'POST' };
+
+      const response = await post(
+        new Request(`${ORIGIN}/api/reactive-state/session`, init),
+        segments('session'),
+      );
+
+      expect(response.status).toBe(413);
+      await expect(response.json()).resolves.toStrictEqual({
+        code: 'TOO_LARGE',
+        error: 'The request is too large.',
+      });
+      expect(pulls).toBe(3);
+      expect(cancel).toHaveBeenCalledTimes(1);
       expect(hoisted.client['login']).not.toHaveBeenCalled();
     });
 

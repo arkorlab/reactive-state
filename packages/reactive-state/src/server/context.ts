@@ -84,6 +84,20 @@ export interface Evaluation {
    * kept — whose statements are sent no more. An operation's alone.
    */
   readonly externalWrite?: ((sql: string) => (ended: ExternalWriteEnd) => void) | undefined;
+  /**
+   * Takes the change of the application's own session that the operation asks for
+   * (`changeSession`), once: it throws where the operation asked already. An operation's alone.
+   */
+  readonly changeSession?: ((change: Json) => void) | undefined;
+  /**
+   * Told of a connection of the application's own tables the operation uses (`followDrizzle`'s
+   * PGlite, a connection checked out of its pool), with a probe of whether it is in a transaction
+   * now: one connection is one probe however often it is told. What it answers unregisters the
+   * probe. An operation's alone; it refuses `changeSession` while any probe says true.
+   */
+  readonly applicationConnection?:
+    | ((connection: WeakKey, inTransaction: () => boolean) => () => void)
+    | undefined;
 }
 
 /**
@@ -162,19 +176,32 @@ export function beganWrite(sql: string): ((ended: ExternalWriteEnd) => void) | u
   return storage().getStore()?.evaluation.externalWrite?.(sql);
 }
 
+/** What `sentAsWrite` is given besides the statement and how it sends. */
+export interface SentOptions<T = unknown> {
+  /** The answer of a statement the operation sends no more of, as its call would fail. */
+  readonly refusal?: ((error: unknown) => T) | undefined;
+  /**
+   * Whether what a statement answered shows it wrote no row, which ends it `none` rather than
+   * `landed`.
+   */
+  readonly unwritten?: ((answered: unknown) => boolean | Promise<boolean>) | undefined;
+}
+
 /**
  * Sends `send`, a statement of `sql` that may write a table of the application's own and ends as it
  * is answered, as the operation under way sends it (`beganWrite`): `refused` says which of its errors
  * the database answered of the statement itself, which wrote nothing of it. A statement answered at
  * once, or through a callback, is of an outcome unknown. A statement the operation sends no more
- * of is answered by `refusal`, as its call would fail — a rejection, a callback — or else thrown.
+ * of is answered by `options.refusal`, as its call would fail — a rejection, a callback — or else
+ * thrown. A promised answer that `options.unwritten` says wrote no row ends the statement `none`.
  */
 export function sentAsWrite<T>(
   sql: string,
   send: () => T,
   refused: (error: unknown) => boolean,
-  refusal?: (error: unknown) => T,
+  options: SentOptions<T> = {},
 ): T {
+  const { refusal, unwritten } = options;
   let ended: ReturnType<typeof beganWrite>;
   try {
     ended = beganWrite(sql);
@@ -190,9 +217,21 @@ export function sentAsWrite<T>(
     ended(refused(error) ? 'none' : 'unknown');
     throw error;
   }
-  if (answered instanceof Promise) return endedBy(answered, ended, refused) as T;
+  if (answered instanceof Promise) return endedBy(answered, ended, refused, unwritten) as T;
   ended('unknown');
   return answered;
+}
+
+/**
+ * Whether `unwritten` says `value` wrote no row, awaited where it answers a promise; a throw or a
+ * rejection says not, and the answer stands.
+ */
+async function unwrittenBy(unwritten: SentOptions['unwritten'], value: unknown): Promise<boolean> {
+  try {
+    return (await unwritten?.(value)) === true;
+  } catch {
+    return false;
+  }
 }
 
 /** What `answered`, a statement's answer, settles to, as it ends the statement: of its error too. */
@@ -200,15 +239,69 @@ async function endedBy(
   answered: Promise<unknown>,
   ended: (end: ExternalWriteEnd) => void,
   refused: (error: unknown) => boolean,
+  unwritten: SentOptions['unwritten'],
 ): Promise<unknown> {
   try {
     const value: unknown = await answered;
-    ended('landed');
+    ended((await unwrittenBy(unwritten, value)) ? 'none' : 'landed');
     return value;
   } catch (error) {
     ended(refused(error) ? 'none' : 'unknown');
     throw error;
   }
+}
+
+/**
+ * What takes the session change the operation under way asks for (`Evaluation.changeSession`):
+ * none outside an operation — a render, a shared view, a route's middleware, or no evaluation at
+ * all. The operation's own state says whether it still takes one.
+ */
+export function sessionChanger(): ((change: Json) => void) | undefined {
+  return storage().getStore()?.evaluation.changeSession;
+}
+
+/**
+ * Notes that the operation under way uses `connection`, one of the application's own tables, and
+ * how to tell it is in a transaction: what unregisters it — none outside an operation. The slot is
+ * read whether or not it is open: a connection the operation left running is still its own.
+ */
+export function usedConnection(
+  connection: WeakKey,
+  inTransaction: () => boolean,
+): (() => void) | undefined {
+  return storage().getStore()?.evaluation.applicationConnection?.(connection, inTransaction);
+}
+
+/**
+ * `run`, a statement or a transaction of the application's own tables the operation under way
+ * sends, counted as under way until it settles: a probe of the operation's that says so, however
+ * the connection's own state reads. Run as it is outside an operation. A promised answer ends it
+ * before whatever awaits it goes on.
+ */
+export function underway(run: () => unknown): unknown {
+  const over = usedConnection({}, () => true);
+  if (over === undefined) return run();
+  let answered: unknown;
+  try {
+    answered = run();
+  } catch (error) {
+    over();
+    throw error;
+  }
+  // One reaction for both outcomes, registered before the caller's: whatever awaits it goes on after.
+  // eslint-disable-next-line unicorn/prefer-then-catch -- a `.catch` would run a tick after a rejection
+  if (answered instanceof Promise) void answered.then(over, over);
+  else over();
+  return answered;
+}
+
+/**
+ * `callback`, bound to the context it is bound in: called later, by whatever code the callback was
+ * handed to, it reads the evaluation of the operation that bound it, as the code that made the call
+ * does — a pool serves a waiting checkout from the context that released a connection.
+ */
+export function inThisContext<F extends (...args: never[]) => unknown>(callback: F): F {
+  return AsyncLocalStorage.bind(callback);
 }
 
 /** Whether the render under way is an event stream's (`Evaluation.streamed`). */

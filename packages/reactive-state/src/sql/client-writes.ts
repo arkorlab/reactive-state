@@ -288,5 +288,7 @@ export function sentToPostgres(
   }
   // A procedure or a `DO` block can `COMMIT` before it raises.
   const whole = sql !== undefined && soleStatement(sql) && !runsCode(sql);
-  return sentAsWrite(shown, run, (error) => whole && refusedByPostgres(error), answer);
+  return sentAsWrite(shown, run, (error) => whole && refusedByPostgres(error), {
+    refusal: answer,
+  });
 }

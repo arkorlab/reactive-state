@@ -3,6 +3,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { type DatabaseHost, hostOf } from '../authority/database-host.ts';
 import { diagnosticsEveryOf } from '../authority/diagnostics.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
+import type { AuthorityErrorEvent, FaultOptions, OnError } from '../authority/error-hook.ts';
 import { AuthorityError, describeThrown } from '../authority/errors.ts';
 import type { ExternalStores } from '../authority/external.ts';
 import type { Application, AuthorityEngineOptions, Stats } from '../authority/model.ts';
@@ -66,7 +67,13 @@ import { EventStreams } from './stream.ts';
  */
 export type AuthorityApplication = Application;
 
-export interface AuthorityObjectOptions {
+export interface AuthorityObjectOptions extends Omit<FaultOptions, 'onError'> {
+  /**
+   * The application's hook for the authority's errors (`OnError`), given the object's environment
+   * as a third argument, the value `stores` receives: a reporter's key and host are there. A hook
+   * of two parameters is as before.
+   */
+  readonly onError?: ObjectOnError | undefined;
   /**
    * How long after a commit the change log goes out; the commits within it go in one request. A
    * second unless given.
@@ -92,16 +99,53 @@ export interface AuthorityObjectOptions {
 /** The object's environment, as its stores are made of it: its bindings, whatever they are. */
 type StoreEnv = AuthorityEnv & Readonly<Record<string, unknown>>;
 
+/** `OnError` of an object: it is also told the object's environment, as `stores` is. */
+type ObjectOnError = (
+  error: unknown,
+  event: AuthorityErrorEvent,
+  env: StoreEnv,
+) => void | Promise<void>;
+
 /** What the object counts: the engine's figures, and the event streams open now. */
 export interface AuthorityStats extends Stats {
   readonly streams: number;
 }
 
-interface AuthoritySetup extends AuthorityApplication {
+interface AuthoritySetup extends AuthorityApplication, Omit<FaultOptions, 'onError'> {
+  readonly onError?: ObjectOnError | undefined;
   readonly deliveryDelayMs?: number | undefined;
   readonly pages: readonly PublicPage[];
   readonly stores?: ((env: StoreEnv) => ExternalStores) | undefined;
   readonly externalPollMs?: number | undefined;
+}
+
+/**
+ * `onError`, whose answer the object is kept for: a promise (or any thenable) passed to
+ * `waitUntil` prevents the object's eviction until it settles, or for up to 15 minutes, whichever
+ * comes first, which a promise that waits on no I/O (a timer) is not kept by otherwise. Its
+ * rejection is kept from the runtime: the engine logs it.
+ */
+export function waitingFor(
+  ctx: DurableObjectState,
+  onError: ObjectOnError,
+  env: StoreEnv,
+): OnError {
+  return (error, event) => {
+    // Normalized once: a thenable that is no promise would run its `then` for each who awaits it.
+    // eslint-disable-next-line promise/no-promise-in-callback -- the hook is the caller's callback
+    const kept = Promise.resolve(onError(error, event, env));
+    ctx.waitUntil(settled(kept));
+    return kept;
+  };
+}
+
+/** `work`, whatever it comes to. */
+async function settled(work: void | PromiseLike<void>): Promise<void> {
+  try {
+    await work;
+  } catch {
+    // Logged by the engine.
+  }
 }
 
 /** How often a shared view's stream with nothing to say says so. */
@@ -151,15 +195,33 @@ function siteFetchOf(env: AuthorityEnv): SiteFetch | undefined {
 }
 
 /** A call's answer as a `Result`: the authority's refusals included, and nothing else caught. */
-async function answer<T>(body: () => Promise<T>): Promise<Result<T>> {
+export async function answer<T>(body: () => Promise<T>): Promise<Result<T>> {
   try {
     return { ok: true, value: await body() };
   } catch (error) {
     if (error instanceof AuthorityError) {
       return { code: error.code, message: error.message, ok: false, status: error.status };
     }
-    throw error;
+    throw delivered(error);
   }
+}
+
+/**
+ * What a fault is delivered as: a copy of its name, message and stack, made before anything
+ * awaits. The application's `onError` is told of the error itself, on a later turn, and may change
+ * it; nothing the call awaits after (the delivery's arming) can then change what it answers.
+ */
+function delivered(error: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  // Of the same class (`instanceof`), with the fields it had when it was met, copied once.
+  const copy: Error = new Error(error.message);
+  Object.setPrototypeOf(copy, Reflect.getPrototypeOf(error));
+  // Every own property, as the error had it: `cause`, an aggregate's `errors`, the application's.
+  return Object.defineProperties(copy, {
+    ...Object.getOwnPropertyDescriptors(error),
+    name: { configurable: true, value: error.name, writable: true },
+    stack: { configurable: true, value: error.stack, writable: true },
+  });
 }
 
 export class AuthorityObject extends DurableObject<AuthorityEnv> implements AuthorityClient {
@@ -231,6 +293,9 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
       programs: setup.programs,
       routes: setup.routes,
       ...(setup.sessions !== undefined && { sessions: setup.sessions }),
+      ...(setup.onError !== undefined && {
+        onError: waitingFor(ctx, setup.onError, env as StoreEnv),
+      }),
       ...(sharing !== undefined && { shareViews: sharing }),
       diagnosticsEveryMs: diagnosticsEveryOf(env.REACTIVE_DIAGNOSTICS),
       externalPollMs: setup.externalPollMs,
@@ -547,13 +612,14 @@ export function authorityObject(
     registryOf({ buildId, operations, programs }),
   );
   const pages = pagesOf(options.pages ?? [], database);
-  const { deliveryDelayMs, externalPollMs, stores } = options;
+  const { deliveryDelayMs, externalPollMs, onError, stores } = options;
   const setup = {
     buildId,
     database,
     deliveryDelayMs,
     externalPollMs,
     middleware,
+    onError,
     operations,
     pages,
     programs,

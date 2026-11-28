@@ -8,21 +8,22 @@ import { compileApp, writeOutputs } from './index.ts';
  * Compiles an application's `.reactive.tsx` components:
  *
  *   node src/compiler/cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>]
- *     [--session <specifier>#<export>] [--prefetch <profile>|<stale>/<revalidate>/<expire>]
- *     [--no-share] [--check]
+ *     [--session <specifier>#<export>] [--session-change <specifier>#<export>]
+ *     [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--no-share] [--check]
  *
  * compiles every component under `<srcDir>` first, in memory, with the custom hooks, the
  * `'use server'` modules and the shared modules it reaches, and reports each refusal; only when it
  * refuses nothing does it write the build into `<dir>`, and the route into `<appDir>` — or, with
  * `--check`, write nothing and exit 1 when any of it is not what a compile would write now.
  * `--session` names how the application reads its own signed-in session, where it signs its users in
- * itself; `--prefetch`, the private cache the roots a request alone renders are rendered inside, for
+ * itself; `--session-change`, how it applies the change of that session a server operation asks for
+ * (`changeSession`); `--prefetch`, the private cache the roots a request alone renders are rendered inside, for
  * a link's prefetch to carry them; `--no-share`, that nothing is shared — no route's view — and
  * every root renders for its own session.
  */
 
 const USAGE =
-  'usage: cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>] [--session <specifier>#<export>] [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--no-share] [--check]';
+  'usage: cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>] [--session <specifier>#<export>] [--session-change <specifier>#<export>] [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--no-share] [--check]';
 const EXIT_FAILED = 1;
 const EXIT_USAGE = 2;
 
@@ -42,6 +43,7 @@ interface Run {
   readonly app: string;
   readonly database: string | undefined;
   readonly session: string | undefined;
+  readonly sessionChange: string | undefined;
   readonly prefetch: string | undefined;
   /** Whether anything may be shared: not where `--no-share` is given. */
   readonly share: boolean;
@@ -65,6 +67,7 @@ function argumentsOf(argv: readonly string[]): Parsed {
         'no-share': { type: 'boolean' },
         prefetch: { type: 'string' },
         session: { type: 'string' },
+        'session-change': { type: 'string' },
       },
     });
   } catch (error) {
@@ -72,11 +75,24 @@ function argumentsOf(argv: readonly string[]): Parsed {
   }
   const { app, check, database, out, prefetch, session } = parsed.values;
   const share = parsed.values['no-share'] !== true;
+  const sessionChange = parsed.values['session-change'];
   const [srcDir, ...more] = parsed.positionals;
   if (out === undefined || app === undefined || srcDir === undefined || more.length > 0) {
     return { usage: USAGE };
   }
-  return { run: { app, check: check === true, database, out, prefetch, session, share, srcDir } };
+  return {
+    run: {
+      app,
+      check: check === true,
+      database,
+      out,
+      prefetch,
+      session,
+      sessionChange,
+      share,
+      srcDir,
+    },
+  };
 }
 
 function main(argv: readonly string[]): number {

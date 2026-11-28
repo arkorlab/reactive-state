@@ -1,7 +1,8 @@
 import { refresh } from 'next/cache';
+import { unstable_rethrow } from 'next/navigation';
 
 import { AUTHORITY_UNAVAILABLE, type Failure } from '../client/index.ts';
-import type { OperationArgument, OperationCall } from '../program.ts';
+import type { Json, OperationArgument, OperationCall } from '../program.ts';
 import { type JsonBudget, jsonBudget, spendJson, toJson } from '../runtime/json.ts';
 import { operationDigest } from '../runtime/outcome.ts';
 import { HTTP_INTERNAL_ERROR } from '../status.ts';
@@ -131,12 +132,56 @@ function isResendable(failure: Failure): boolean {
 }
 
 /**
+ * How the application applies the change of its own session that a server operation asks for
+ * (`changeSession` of `./server`), on its server: it is handed the change, which is JSON of 4 KiB
+ * at most, once the operation has succeeded and before the route renders again — to set a cookie,
+ * for one. The compile writes the application's into the stubs (`--session-change`). An error it
+ * throws is the Server Action's: the operation ran all the same, and its page is not rendered again.
+ */
+export type SessionChange = (change: Json) => void | Promise<void>;
+
+/**
  * What a stub runs an operation by: the build, and the application's session source, where it
  * signs its users in itself (`SessionSource`). A stub of the demo's sessions names the build alone.
  */
 export interface OperatedBy {
   readonly build: string;
   readonly session?: SessionSource | undefined;
+  /** How the application applies the session change an operation asks for (`SessionChange`). */
+  readonly sessionChange?: SessionChange | undefined;
+}
+
+/**
+ * Applies the session change an operation that succeeded asked for, where it asked for one: by the
+ * application's applier, awaited. A change with no applier to take it is logged and left, since the
+ * operation succeeded all the same; an applier that throws is logged and thrown, as the Server
+ * Action's error.
+ */
+async function applied(
+  module: string,
+  name: string,
+  change: Json | undefined,
+  apply: SessionChange | undefined,
+): Promise<void> {
+  if (change === undefined) {
+    return;
+  }
+  if (apply === undefined) {
+    // eslint-disable-next-line no-console -- the operation succeeded: the application's server is told in its log
+    console.error(
+      `${module}#${name} asked for a change of the session, and the application names no applier: name one with \`sessionChange\` (\`--session-change\`). The change was not applied.`,
+    );
+    return;
+  }
+  try {
+    await apply(change);
+  } catch (error) {
+    // Next.js's control flow — `redirect()`, `notFound()` — is no failure to log.
+    unstable_rethrow(error);
+    // eslint-disable-next-line no-console -- logged, then thrown as the Server Action's error
+    console.error(`The session change that ${module}#${name} asked for was not applied:`, error);
+    throw error;
+  }
 }
 
 /**
@@ -149,7 +194,11 @@ export async function operate(
   args: readonly unknown[],
   built: string | OperatedBy,
 ): Promise<unknown> {
-  const { build, session: source } = typeof built === 'string' ? { build: built } : built;
+  const {
+    build,
+    session: source,
+    sessionChange,
+  } = typeof built === 'string' ? { build: built } : built;
   const budget = jsonBudget();
   const call: OperationCall = {
     args: args.map((argument, index) => encodeArgument(argument, index, budget)),
@@ -179,6 +228,7 @@ export async function operate(
       { cause: result, code, outcome: unknown ? 'unknown' : 'refused', status },
     );
   }
+  await applied(module, name, result.value.sessionChange, sessionChange);
   try {
     refresh();
   } catch {

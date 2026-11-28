@@ -26,9 +26,10 @@ export async function readAfterOperation(tail: ExternalTail): Promise<void> {
     try {
       await tail.read();
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error(
+      tail.fault(
+        error,
         `An external store's change log could not be read after an operation: ${describeThrown(error)}`,
+        true,
       );
     }
   })();
@@ -39,6 +40,22 @@ export async function readAfterOperation(tail: ExternalTail): Promise<void> {
     await Promise.race([read, waited]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * What ends an operation's call: the stores' logs read where it may have written them, and then
+ * `flush`, which tells the application of its faults — after the wait, whatever came of it.
+ */
+export async function afterOperation(
+  tail: ExternalTail,
+  read: boolean,
+  flush?: () => void,
+): Promise<void> {
+  try {
+    if (read) await readAfterOperation(tail);
+  } finally {
+    flush?.();
   }
 }
 

@@ -8,6 +8,7 @@ import {
   PROTOCOL_VERSION,
   type RenderScope,
 } from '../../src/program.ts';
+import * as session from './app/actions/session.ts';
 import * as todos from './app/actions/todos.ts';
 import { requireUser } from './app/auth.ts';
 import { db } from './app/db.ts';
@@ -327,7 +328,10 @@ export const programs: readonly ComponentProgram[] = [
 ];
 
 /** Every server operation module of the test application, by its id. */
-export const operations: Readonly<Record<string, OperationModule>> = { 'actions/todos': todos };
+export const operations: Readonly<Record<string, OperationModule>> = {
+  'actions/session': session,
+  'actions/todos': todos,
+};
 
 /** The test application, as a compile's `authority.mts` hands it to an authority. */
 export const application = { buildId: BUILD, database: db, operations, programs } as const;

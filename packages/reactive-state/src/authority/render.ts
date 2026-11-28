@@ -11,6 +11,7 @@ import type { DatabaseDefinition } from '../server/schema.ts';
 import { HTTP_FORBIDDEN } from '../status.ts';
 import { digest, frozenJson, isJson, shortDigest } from './canonical.ts';
 import { Dependencies } from './dependencies.ts';
+import type { Report } from './error-hook.ts';
 import { AuthorityError } from './errors.ts';
 import { renderEvaluation, type Scope } from './evaluation.ts';
 import { type CheckedItem, itemsWithin } from './items.ts';
@@ -77,6 +78,8 @@ export interface Renderer {
   readonly evaluatedBy: Map<string, number>;
   /** The components rendered so far, toward the limit. */
   instances: number;
+  /** Tells the application's `onError` of a fault of the render's, or logs it. */
+  readonly report: Report;
 }
 
 /**

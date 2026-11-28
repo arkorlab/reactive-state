@@ -1,10 +1,11 @@
-import { tableReads } from '../server/context.ts';
+import { inThisContext, tableReads, usedConnection } from '../server/context.ts';
 import {
   callbackOf,
   facadeOf,
   guardedObjects,
   refusalOf,
   retainedReceiver,
+  underwayQuery,
 } from './client-objects.ts';
 import {
   answerOf,
@@ -150,6 +151,12 @@ function inTransaction(connection: PoolConnection): boolean {
   return statusOf(connection) !== IDLE;
 }
 
+/** Whether `connection` is in a transaction by its state: open (`T`) or failed (`E`). */
+function transacting(connection: PoolConnection): boolean {
+  const status = statusOf(connection);
+  return status === 'T' || status === 'E';
+}
+
 /**
  * What a checked-out connection does of an `error` event: the statement it ended answers it, and of
  * no listener `pg` would throw it at the process, the authority's. The pool listens of an idle one.
@@ -178,6 +185,13 @@ function settingsRefused(): Promise<never> {
 /** `connection`, a pool or one it checked out, its queries in a render noted by `plans`. */
 function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedOut: boolean): C {
   let client = connection;
+  // A connection the operation checked out is looked at while it holds it: until its release. One
+  // kept from before the operation is its own as the operation sends a statement through it.
+  let unregister: (() => void) | undefined;
+  const used = (): void => {
+    unregister = usedConnection(connection, () => transacting(connection)) ?? unregister;
+  };
+  if (checkedOut) used();
   /** What an operation's statements wrote in the transaction this connection opened, if one is open. */
   let writes: TransactionWrites | undefined;
   /** Whether a statement of this checked-out connection changed its settings beyond a transaction. */
@@ -336,7 +350,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     writes = undefined;
     return held.through(run(), () => false, answersRollback);
   };
-  const query = (first: unknown, ...rest: unknown[]): unknown => {
+  const queried = (first: unknown, ...rest: unknown[]): unknown => {
     const statement = statementOf(first, rest);
     if (
       checkedOut &&
@@ -369,6 +383,10 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     if (checkedOut && typeof text === 'string' && endsTransaction(text)) writes?.endedUnseen();
     return marking(text, () => sentToPostgres('query', args, () => outside('query', args), writes));
   };
+  const query = (first: unknown, ...rest: unknown[]): unknown => {
+    if (checkedOut) used();
+    return underwayQuery([first, ...rest], ([text, ...more]) => queried(text, ...more));
+  };
   const checkOut = async (args: readonly unknown[]): Promise<PoolConnection> =>
     tracked((await called(connection, 'connect', args)) as PoolConnection, plans, true);
   const connect = (...args: unknown[]): unknown => {
@@ -382,13 +400,14 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
         args,
       );
     }
+    // Called by the pool in whichever context serves the checkout: in the caller's, as its own.
     return called(connection, 'connect', [
-      (error: unknown, held: PoolConnection | undefined, done: unknown): unknown => {
+      inThisContext((error: unknown, held: PoolConnection | undefined, done: unknown): unknown => {
         if (held === undefined) return Reflect.apply(callback, undefined, [error, held, done]);
         const answered = tracked(held, plans, true);
         const release: unknown = Reflect.get(answered, 'release');
         return Reflect.apply(callback, undefined, [error, answered, release]);
-      },
+      }),
     ]);
   };
   let released = false;
@@ -407,6 +426,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     if (closedIn) writes?.undone();
     else writes?.ended('unknown');
     writes = undefined;
+    unregister?.();
     return called(connection, 'release', inTransaction(connection) ? [true] : args);
   };
   if (checkedOut) called(connection, 'on', ['error', heard]);
