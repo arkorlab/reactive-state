@@ -1,4 +1,5 @@
-import { streamedRender, type TableRead, tableReads } from '../../server/context.ts';
+import { sharedRender, streamedRender, type TableRead, tableReads } from '../../server/context.ts';
+import { ownNow } from '../../server/untracked.ts';
 import { columnTypesOf, instructionsOf, rowsIn, schemaOf } from './answers.ts';
 import { bytecodeReads, type SchemaEntry } from './bytecode.ts';
 import type { SqliteKeyColumn } from './keys.ts';
@@ -15,7 +16,7 @@ import {
   wheresTogether,
 } from './reads.ts';
 import { planSchemaSql } from './schema-read.ts';
-import { type StatementRead, statementRead } from './scopes.ts';
+import type { StatementRead } from './scopes.ts';
 import { READS_ONLY, sentBy, sentCall, sessionText } from './sent.ts';
 import {
   COLLATED,
@@ -23,11 +24,11 @@ import {
   type PlanAnswers,
   sourcesOf,
   type TableSource,
-  tablesNamed,
 } from './sources.ts';
 import { TRACKED } from './tracked.ts';
+import { jsonTablesIn, type StatementText, textOf, unplannedRead } from './unplanned.ts';
 import { holdsKind } from './values.ts';
-import { type Conditions, conditionsOf, leadingWord, readsAlone, type Term } from './where.ts';
+import { leadingWord, readsAlone, type Term } from './where.ts';
 import { refusalOf, writes } from './words.ts';
 
 /**
@@ -82,6 +83,11 @@ interface Plan {
   readonly keyed?: ReadonlyMap<string, readonly SourceRead[]> | undefined;
   /** When the plan is asked again, where it is kept for a while alone: of a batch that failed. */
   readonly until?: number | undefined;
+  /**
+   * What a render every visitor shares reads of the request by the statement, which no plan said
+   * the tables of, where its words do not say it reads followed tables alone (`unplannedRead`).
+   */
+  readonly requestBound?: string | undefined;
 }
 
 /**
@@ -100,22 +106,6 @@ const PLAN_ANSWERS = 2;
  */
 function readsBesidePlan(sql: string): boolean {
   return READS_ONLY.test(sql) || leadingWord(sql) === 'select' || readsAlone(sql);
-}
-
-/** What a statement's text says, which its plan is asked and read by. */
-interface StatementText {
-  readonly conditions: Conditions | undefined;
-  /** The tables it names, each of whose columns the plan asks. */
-  readonly named: readonly string[];
-  readonly scoped: StatementRead | undefined;
-}
-
-/** What `sql` says: a statement of one table, or one read scope by scope. */
-function textOf(sql: string): StatementText {
-  const conditions = conditionsOf(sql);
-  if (conditions !== undefined) return { conditions, named: [conditions.table], scoped: undefined };
-  const scoped = statementRead(sql);
-  return { conditions, named: tablesNamed(scoped), scoped };
 }
 
 /**
@@ -158,6 +148,17 @@ class SqlitePlans {
     return { tables: [...new Set(this.#followed.byName.values())] };
   }
 
+  /**
+   * Every followed table, read whole, of `sql`, whose tables no plan says, with what a render every
+   * visitor shares reads of the request by it, as its words say (`unplannedRead`).
+   */
+  #unplanned(sql: string, text = textOf(sql)): Plan {
+    return {
+      ...this.#everyTable(),
+      requestBound: unplannedRead(sql, text, this.#followed.byName.keys()),
+    };
+  }
+
   /** The terms of `table` that are of its keys, as its columns, `declared`, hold them. */
   #keyTerms(
     table: string,
@@ -183,7 +184,7 @@ class SqlitePlans {
   /** Whether D1 answered no `EXPLAIN` lately: within `LIMITS.unexplainedMs`, after which it is asked again. */
   #unexplained(): boolean {
     return (
-      this.#unexplainedAt !== undefined && Date.now() - this.#unexplainedAt < LIMITS.unexplainedMs
+      this.#unexplainedAt !== undefined && ownNow() - this.#unexplainedAt < LIMITS.unexplainedMs
     );
   }
 
@@ -208,7 +209,7 @@ class SqlitePlans {
       await (binding.prepare('EXPLAIN SELECT 1') as D1Run).all();
       return true;
     } catch (error) {
-      this.#unexplainedAt = Date.now();
+      this.#unexplainedAt = ownNow();
       if (!this.#warned) {
         this.#warned = true;
         // eslint-disable-next-line no-console
@@ -270,7 +271,7 @@ class SqlitePlans {
       // table for a while, so that its renders wait on no failing batch.
       if (readsBesidePlan(sql)) {
         this.#warnUnplanned(sql, error);
-        return { ...this.#everyTable(), until: Date.now() + LIMITS.unexplainedMs };
+        return { ...this.#unplanned(sql, text), until: ownNow() + LIMITS.unexplainedMs };
       }
       throw error;
     }
@@ -283,10 +284,12 @@ class SqlitePlans {
     const schema = schemaOf(answers[1]);
     const read = bytecodeReads(instructionsOf(answers[0]), schema);
     if (read.kind === 'writes') throw writes(sql);
-    if (read.kind === 'unread' || read.virtuals > (scoped?.functions.length ?? 0)) {
-      return this.#everyTable();
-    }
+    if (read.kind === 'unread') return this.#unplanned(sql, text);
+    // Each b-tree it opens is a followed table's, or a fault; a virtual table its words call not —
+    // an FTS table, one inside a view — reads what no plan says.
     const tables = [...read.tables].map((name) => this.#declared(name));
+    const called = read.virtuals === 0 ? 0 : (scoped?.functions.length ?? jsonTablesIn(sql));
+    if (read.virtuals > called) return this.#unplanned(sql, text);
     const columns = new Map(
       named.map((table, at) => [table, columnTypesOf(answers[at + PLAN_ANSWERS])]),
     );
@@ -332,7 +335,7 @@ class SqlitePlans {
    * asked for a while.
    */
   #warnUnnamed(error: unknown): void {
-    this.#unnamedAt = Date.now();
+    this.#unnamedAt = ownNow();
     if (this.#namedWarned) return;
     this.#namedWarned = true;
     // eslint-disable-next-line no-console
@@ -354,7 +357,7 @@ class SqlitePlans {
     const asked = sources.filter((each): each is CandidateRead => each.candidate !== undefined);
     if (asked.length === 0) return new Map();
     const failed = this.#unnamedAt;
-    if (failed !== undefined && Date.now() - failed < LIMITS.unexplainedMs) return new Map();
+    if (failed !== undefined && ownNow() - failed < LIMITS.unexplainedMs) return new Map();
     try {
       const statements = asked.map(({ candidate }) => {
         const statement = binding.prepare(candidate.sql) as D1Statement;
@@ -399,14 +402,14 @@ class SqlitePlans {
     }
     const kept = this.#kept.get(sql);
     this.#kept.delete(sql);
-    if (kept !== undefined && (kept.until === undefined || Date.now() < kept.until)) {
+    if (kept !== undefined && (kept.until === undefined || ownNow() < kept.until)) {
       this.#kept.set(sql, kept);
       return kept;
     }
     const plan = await this.#shared(sql, values, binding);
     // A plan asked as the schema changed may say what it is no more: read whole, and kept not.
     if (plan === undefined || this.#followed.schema.generation !== generation) {
-      return this.#everyTable();
+      return this.#unplanned(sql);
     }
     if (this.#kept.size >= LIMITS.keptPlans) {
       const [oldest] = this.#kept.keys();
@@ -425,6 +428,8 @@ class SqlitePlans {
   ): Promise<readonly TableRead[]> {
     const kept = this.#kept.get(sql);
     const plan = await this.#planOf(sql, values, binding);
+    // Noted of each render that takes the plan, kept or of another render's ask, not of the ask.
+    if (plan.requestBound !== undefined) sharedRender()?.boundToRequest(plan.requestBound);
     // Of a plan asked now, a candidate would be one round trip more, after the statement beside it.
     const asked: ReadonlyMap<SourceRead, readonly Where[]> =
       streamed && plan === kept ? await this.#named(plan, values, binding) : new Map();

@@ -89,7 +89,7 @@ const CLAUSES = new Set(['from', 'group', 'having', 'limit', 'order', 'where']);
 /** The words that make a term of a condition no term of its `AND`. */
 const LOOSENING = new Set(['between', 'case', 'or']);
 /** SQLite's functions read as tables of a text of JSON, which reads nothing of the database. */
-const JSON_TABLES = new Set(['json_each', 'json_tree', 'jsonb_each', 'jsonb_tree']);
+export const JSON_TABLES = new Set(['json_each', 'json_tree', 'jsonb_each', 'jsonb_tree']);
 /** SQLite's words of a join's kind, up to three of which stand before `JOIN`, of any order. */
 const JOIN_WORDS = new Set(['cross', 'full', 'inner', 'left', 'natural', 'outer', 'right']);
 /** Whether a run of those words is a left join, of the runs this reads. */

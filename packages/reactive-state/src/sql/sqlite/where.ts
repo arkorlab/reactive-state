@@ -375,7 +375,7 @@ function closedAt(sql: string, found: number, closing: string): number {
 }
 
 /** Where the run of text at `at` ends — a quoted name or string, a comment — or `at`, of none. */
-function runEnd(sql: string, at: number): number {
+export function runEnd(sql: string, at: number): number {
   const char = sql[at];
   if (char === "'" || char === '"' || char === '`') return quotedEnd(sql, at) ?? sql.length;
   if (char === '[') return closedAt(sql, sql.indexOf(']', at), ']');
@@ -393,7 +393,7 @@ const NAME_CHARACTER = /[\w$\u{80}-\u{10FFFF}]/u;
  * Whether a named parameter begins at `at` of `sql`: SQLite reads one to its own end, past a quote
  * within it (`$a(')`), which this reads not.
  */
-function namedAt(sql: string, at: number): boolean {
+export function namedAt(sql: string, at: number): boolean {
   const char = sql[at] ?? '';
   // `$` is a character of a name too; `:`, `@` and `#` begin a parameter after a name as well.
   return NAMED.has(char) && (char !== '$' || !NAME_CHARACTER.test(sql[at - 1] ?? ''));

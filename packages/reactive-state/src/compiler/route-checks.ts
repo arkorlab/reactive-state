@@ -3,6 +3,7 @@ import type { Node } from 'typescript/ast';
 import { failIn } from './errors.ts';
 import { exportOf } from './module-exports.ts';
 import type { Modules } from './modules.ts';
+import { Reach } from './reach.ts';
 import { paramsNotGiven, rootsImported, type ShapedPage } from './route-pages.ts';
 import {
   type AppLayout,
@@ -162,11 +163,12 @@ function checkChains(registered: readonly Registered[], checking: Checking): voi
     chains.set(root, (chains.get(root) ?? new Set()).add(chainName(each.chain)));
   }
   const pages = new Set(registered.map((each) => each.shaped.page.file));
+  const reach = new Reach(modules, undefined);
   // A layout wraps every page below it: the roots it renders are the same for each of them, where
   // the chain around them is the page's own.
   const imported = new Map<string, ReturnType<typeof rootsImported>>();
   const rootsOf = (file: string): ReturnType<typeof rootsImported> => {
-    const known = imported.get(file) ?? rootsImported({ file }, modules);
+    const known = imported.get(file) ?? rootsImported({ file }, modules, reach);
     imported.set(file, known);
     return known;
   };

@@ -6,13 +6,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { AssertedSession } from '../src/asserted.ts';
-import { type CommitEvent, Engine, startAuthority } from '../src/authority/index.ts';
+import type { CommitEvent, Engine } from '../src/authority/index.ts';
 import { PublicViews } from '../src/authority/public.ts';
 import { ASSERTED } from '../src/authority/sessions.ts';
 import { httpClient } from '../src/client/index.ts';
 import type { RenderResult, Result, RootRequest } from '../src/program.ts';
 import { readEvents } from './support/event-stream.ts';
-import { application, BUILD } from './support/program.ts';
+import { opened, started } from './support/todo-app/engine.ts';
+import { BUILD } from './support/todo-app/programs.ts';
 
 /** The fixture's project page, with its first item selected: Alice owns its project. */
 const PAGE: RootRequest = {
@@ -31,13 +32,13 @@ interface Opened {
   readonly advance: (ms: number) => void;
 }
 
-/** An authority that admits the application's own sessions, on a clock the test moves. */
-function open(sessions: 'asserted' | 'demo' = 'asserted'): Opened {
+/**
+ * An authority that admits the application's own sessions, on a clock the test moves, over a
+ * database of the test application's made anew.
+ */
+async function open(sessions: 'asserted' | 'demo' = 'asserted'): Promise<Opened> {
   let now = START;
-  const engine = new Engine({ ...application, clock: () => now, sessions });
-  onTestFinished(async () => {
-    await engine.close();
-  });
+  const engine = await opened({ clock: () => now, sessions });
   const commits: CommitEvent[] = [];
   engine.onCommit((event) => {
     commits.push(event);
@@ -69,7 +70,7 @@ function valueOf<T>(result: Result<T>): T {
 
 describe('sessions the application asserts', () => {
   it('renders for the user it asserts', async () => {
-    const { engine } = open();
+    const { engine } = await open();
 
     const rendered = await render(engine, alice());
 
@@ -78,7 +79,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('writes nothing to admit one', async () => {
-    const { commits, engine } = open();
+    const { commits, engine } = await open();
     const before = engine.revision();
 
     await render(engine, alice());
@@ -89,7 +90,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('reads a demo session or a malformed one as none', async () => {
-    const { engine } = open();
+    const { engine } = await open();
 
     await expect(render(engine, 'a-demo-session-id')).resolves.toMatchObject({
       status: 'unauthenticated',
@@ -105,7 +106,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('reads one that expired as none', async () => {
-    const { advance, engine } = open();
+    const { advance, engine } = await open();
     advance(HOUR);
 
     await expect(render(engine, alice('k1', START + HOUR))).resolves.toMatchObject({
@@ -114,7 +115,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('reads one asserted to last past thirty days as none', async () => {
-    const { engine } = open();
+    const { engine } = await open();
 
     await expect(
       render(engine, alice('k1', START + ASSERTED.lifetimeMs + 1)),
@@ -125,7 +126,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('keeps a key ended past every session admitted under it before', async () => {
-    const { advance, engine } = open();
+    const { advance, engine } = await open();
     // The furthest a session admitted before the end may last.
     const session = alice('k1', START + ASSERTED.lifetimeMs);
     await render(engine, session);
@@ -139,7 +140,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('refuses the demo sign-in', async () => {
-    const { engine } = open();
+    const { engine } = await open();
 
     await expect(engine.login('alice')).rejects.toMatchObject({
       code: 'NO_DEMO_SESSIONS',
@@ -148,7 +149,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('ends every session of a key, for good, and says so in the commit', async () => {
-    const { commits, engine } = open();
+    const { commits, engine } = await open();
     await render(engine, alice('k1'));
 
     await engine.endSession('k1');
@@ -165,7 +166,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('refuses a key no session could be asserted under', async () => {
-    const { engine } = open();
+    const { engine } = await open();
 
     await expect(engine.endSession('a.b')).rejects.toMatchObject({
       code: 'INVALID_SESSION_KEY',
@@ -174,7 +175,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('keeps one key’s users apart', async () => {
-    const { engine } = open();
+    const { engine } = await open();
     const rendered = await render(engine, alice('shared'));
 
     const asBob = engine.view(
@@ -186,7 +187,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('wakes the streams of a key that ended', async () => {
-    const { engine } = open();
+    const { engine } = await open();
     const rendered = await render(engine, alice('k1'));
     const watched = await engine.watch(alice('k1'), rendered.frame.subscription);
     const other = await engine.watch(
@@ -209,7 +210,7 @@ describe('sessions the application asserts', () => {
     onTestFinished(() => {
       committed.mockRestore();
     });
-    const { engine } = open();
+    const { engine } = await open();
 
     await engine.endSession('k1');
     const views = committed.mock.contexts.at(-1) as PublicViews;
@@ -219,7 +220,7 @@ describe('sessions the application asserts', () => {
   });
 
   it('renews a stream long before a long session ends', async () => {
-    const { engine } = open();
+    const { engine } = await open();
     await render(engine, alice('k1', START + 7 * 24 * HOUR));
 
     await expect(engine.expiresIn(alice('k1', START + 7 * 24 * HOUR))).resolves.toBe(
@@ -228,13 +229,13 @@ describe('sessions the application asserts', () => {
   });
 
   it('is none to an authority of the demo’s sessions', async () => {
-    const { engine } = open('demo');
+    const { engine } = await open('demo');
 
     await expect(render(engine, alice())).resolves.toMatchObject({ status: 'unauthenticated' });
   });
 
   it('ends no key where the authority admits the demo’s sessions', async () => {
-    const { engine } = open('demo');
+    const { engine } = await open('demo');
 
     await expect(engine.endSession('k1')).rejects.toMatchObject({
       code: 'NO_ASSERTED_SESSIONS',
@@ -249,10 +250,7 @@ describe('sessions the application asserts', () => {
     });
     const filename = path.join(dir, 'authority.sqlite');
     let now = START;
-    const engine = new Engine({ ...application, clock: () => now, filename, sessions: 'asserted' });
-    onTestFinished(async () => {
-      await engine.close();
-    });
+    const engine = await opened({ clock: () => now, filename, sessions: 'asserted' });
     // A to-do of no title: refused, its receipt kept for a resend, and nothing committed.
     const refused = async (operationId: string): Promise<void> => {
       const call = { build: BUILD, module: 'actions/todos', name: 'createTodo', operationId };
@@ -282,10 +280,7 @@ describe('sessions the application asserts', () => {
 
 describe('an asserted session over HTTP', () => {
   it('crosses in its header, and a sign-out ends it', async () => {
-    const authority = await startAuthority({ ...application, sessions: 'asserted' });
-    onTestFinished(async () => {
-      await authority.close();
-    });
+    const authority = await started({ sessions: 'asserted' });
     const client = httpClient({ token: authority.token, url: authority.url });
     const asserted = { expires: Date.now() + HOUR, id: 'k-http', user: 'alice' };
 
@@ -298,10 +293,7 @@ describe('an asserted session over HTTP', () => {
   });
 
   it('renews its stream at its expiry, and renders nothing more', async () => {
-    const authority = await startAuthority({ ...application, sessions: 'asserted' });
-    onTestFinished(async () => {
-      await authority.close();
-    });
+    const authority = await started({ sessions: 'asserted' });
     const client = httpClient({ token: authority.token, url: authority.url });
     // Long enough to open the stream within it.
     const asserted = { expires: Date.now() + 500, id: 'k-renew', user: 'alice' };
@@ -318,10 +310,7 @@ describe('an asserted session over HTTP', () => {
   });
 
   it('refuses the demo sign-in', async () => {
-    const authority = await startAuthority({ ...application, sessions: 'asserted' });
-    onTestFinished(async () => {
-      await authority.close();
-    });
+    const authority = await started({ sessions: 'asserted' });
     const client = httpClient({ token: authority.token, url: authority.url });
 
     await expect(client.login('alice')).resolves.toMatchObject({

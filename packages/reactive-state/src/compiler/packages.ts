@@ -119,6 +119,34 @@ function readJson(file: string): Json | undefined {
   }
 }
 
+/** What reads a package's manifest: a compile's store (`ManifestStore`), or a read of it anew. */
+interface Manifests {
+  /** The manifest at `file`: none where there is none, or it is no object of JSON. */
+  readonly read: (file: string) => Json | undefined;
+}
+
+/** What reads outside a compile: each manifest anew, at each ask. */
+const ANEW: Manifests = { read: readJson };
+
+/**
+ * The manifests one compile's lookups read here (`packageFiles`, `browserMapped`), by their paths,
+ * each read at the first ask alone — one missing, or no JSON, as well — held by the compile's
+ * `Modules` and let go of with it: the next compile reads each anew. What `aliases.ts` reads of a
+ * manifest — a directory's entries, a configuration's package — it reads anew.
+ */
+export class ManifestStore implements Manifests {
+  readonly #read = new Map<string, Json | undefined>();
+
+  read(file: string): Json | undefined {
+    if (this.#read.has(file)) {
+      return this.#read.get(file);
+    }
+    const manifest = readJson(file);
+    this.#read.set(file, manifest);
+    return manifest;
+  }
+}
+
 /** `url` without the query or the fragment it ends with, which name no other file. */
 function withoutQuery(url: string): string {
   const end = url.search(/[?#]/u);
@@ -318,10 +346,11 @@ function remapped(directory: string, manifest: Json, file: string | undefined): 
  * The files a bundler may take for `file` — one an alias, `exports` or `imports` names — through the
  * `browser` field of the package it is in, where that maps it to another: a Durable Object's bundle
  * and the browser's read it alike. Its TypeScript and its JavaScript both, where both are there,
- * since a bundler may read `./x.js` as TypeScript does, or as it is.
+ * since a bundler may read `./x.js` as TypeScript does, or as it is. The manifest is read through
+ * `manifests`: a compile's store, or else anew.
  */
-export function browserMapped(file: string): readonly string[] {
-  const scope = scopeOf(path.dirname(file));
+export function browserMapped(file: string, manifests: Manifests = ANEW): readonly string[] {
+  const scope = scopeOf(path.dirname(file), manifests);
   const to = scope === undefined ? undefined : browserEntry(scope.directory, scope.manifest, file);
   if (scope === undefined || typeof to !== 'string') {
     return [];
@@ -336,8 +365,13 @@ export function browserMapped(file: string): readonly string[] {
  * "./src/shared.js"`), as the field lets a package replace a module: a file of the package's, or
  * the module of another name; none where the field replaces nothing of the name, or with none.
  */
-function replacedName(specifier: string, directory: string, consumer: Consumer): readonly string[] {
-  const scope = scopeOf(directory);
+function replacedName(
+  specifier: string,
+  directory: string,
+  consumer: Consumer,
+  manifests: Manifests,
+): readonly string[] {
+  const scope = scopeOf(directory, manifests);
   const map = scope?.manifest['browser'];
   if (
     scope === undefined ||
@@ -352,7 +386,7 @@ function replacedName(specifier: string, directory: string, consumer: Consumer):
     return [];
   }
   if (!to.startsWith('.')) {
-    const file = packageFile(to, directory, consumer);
+    const file = packageFile(to, directory, consumer, manifests);
     return file === undefined ? [] : [file];
   }
   const target = path.join(scope.directory, to);
@@ -362,10 +396,11 @@ function replacedName(specifier: string, directory: string, consumer: Consumer):
 /** The package `directory` is in: the nearest `package.json`, in it or above it, and its own. */
 function scopeOf(
   directory: string,
+  manifests: Manifests,
 ): { readonly directory: string; readonly manifest: Json } | undefined {
   let from = directory;
   for (;;) {
-    const manifest = readJson(path.join(from, 'package.json'));
+    const manifest = manifests.read(path.join(from, 'package.json'));
     if (manifest !== undefined) {
       return { directory: from, manifest };
     }
@@ -380,8 +415,9 @@ function scopeOf(
 /** The `imports` of the package `directory` is in, where it declares them. */
 function importsOf(
   directory: string,
+  manifests: Manifests,
 ): { readonly directory: string; readonly imports: Json } | undefined {
-  const scope = scopeOf(directory);
+  const scope = scopeOf(directory, manifests);
   const imports = scope?.manifest['imports'];
   return scope !== undefined && typeof imports === 'object' && imports !== null
     ? { directory: scope.directory, imports: imports as Json }
@@ -404,26 +440,32 @@ function importedFile(
   specifier: string,
   directory: string,
   consumer: Consumer,
+  manifests: Manifests,
 ): string | undefined {
-  const own = importsOf(directory);
+  const own = importsOf(directory, manifests);
   const found = own === undefined ? undefined : keyFor(own.imports, specifier);
   if (own === undefined || found === undefined) {
     return undefined;
   }
   const external = (target: string): string | undefined =>
-    PACKAGE.test(target) ? packageFile(target, own.directory, consumer) : undefined;
+    PACKAGE.test(target) ? packageFile(target, own.directory, consumer, manifests) : undefined;
   const resolving = { conditions: consumer.conditions, external, matched: found.matched };
   return targetFile(own.directory, own.imports[found.key], resolving) ?? undefined;
 }
 
 /** The file a package's specifier names from `directory` to `consumer`. */
-function packageFile(specifier: string, directory: string, consumer: Consumer): string | undefined {
+function packageFile(
+  specifier: string,
+  directory: string,
+  consumer: Consumer,
+  manifests: Manifests,
+): string | undefined {
   const [first = '', second = ''] = specifier.split('/', 2);
   const packageName = first.startsWith('@') ? `${first}/${second}` : first;
   const subpath = `.${specifier.slice(packageName.length)}`;
   // The package the component is in, named by its own name, as Node lets a package with `exports`
   // import itself, before any of `node_modules`.
-  const own = scopeOf(directory);
+  const own = scopeOf(directory, manifests);
   if (own?.manifest['name'] === packageName && own.manifest['exports'] !== undefined) {
     return exportedFile(own.directory, own.manifest, subpath, consumer);
   }
@@ -433,7 +475,7 @@ function packageFile(specifier: string, directory: string, consumer: Consumer): 
     ? undefined
     : exportedFile(
         packageDir,
-        readJson(path.join(packageDir, 'package.json')) ?? {},
+        manifests.read(path.join(packageDir, 'package.json')) ?? {},
         subpath,
         consumer,
       );
@@ -441,13 +483,19 @@ function packageFile(specifier: string, directory: string, consumer: Consumer): 
 
 /**
  * The files `specifier` — a package's, or a `#` import of the application's — names from
- * `directory` on `side`, to each of what loads it; none it names no file of.
+ * `directory` on `side`, to each of what loads it; none it names no file of. The manifests are read
+ * through `manifests`: a compile's store, or else anew.
  */
-export function packageFiles(specifier: string, directory: string, side: Side): readonly string[] {
+export function packageFiles(
+  specifier: string,
+  directory: string,
+  side: Side,
+  manifests: Manifests = ANEW,
+): readonly string[] {
   const files = new Set<string>();
   const consumers = CONSUMERS[side];
   for (const consumer of consumers) {
-    const named = namedFiles(specifier, directory, consumer);
+    const named = namedFiles(specifier, directory, consumer, manifests);
     for (const each of named) {
       const real = realFile(each);
       if (real !== undefined) {
@@ -464,17 +512,22 @@ export function packageFiles(specifier: string, directory: string, side: Side): 
  * bundler does and another may not: both are the module's — and what the importing package's own
  * field replaces the name with.
  */
-function namedFiles(specifier: string, directory: string, consumer: Consumer): readonly string[] {
+function namedFiles(
+  specifier: string,
+  directory: string,
+  consumer: Consumer,
+  manifests: Manifests,
+): readonly string[] {
   const imported = specifier.startsWith('#');
   const file = imported
-    ? importedFile(specifier, directory, consumer)
-    : packageFile(specifier, directory, consumer);
+    ? importedFile(specifier, directory, consumer, manifests)
+    : packageFile(specifier, directory, consumer, manifests);
   const named = file === undefined ? [] : [file];
   if (!consumer.browserMap) {
     return named;
   }
   // What the name is replaced with is read on as the bundler reads it: through the `browser` field
   // of the package that file is in too, a package the name was replaced with among them.
-  const replaced = imported ? [] : replacedName(specifier, directory, consumer);
-  return [...named, ...replaced].flatMap((each) => [each, ...browserMapped(each)]);
+  const replaced = imported ? [] : replacedName(specifier, directory, consumer, manifests);
+  return [...named, ...replaced].flatMap((each) => [each, ...browserMapped(each, manifests)]);
 }
