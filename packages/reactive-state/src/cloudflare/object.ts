@@ -142,6 +142,8 @@ async function settled(work: void | PromiseLike<void>): Promise<void> {
 
 /** How often a shared view's stream with nothing to say says so. */
 const HEARTBEAT_MS = 15_000;
+/** Where the object's storage notes the build whose change log it made: its start need not wait. */
+const LOG_MADE = 'reactive-state:log-made';
 /** How often the object prunes the change log of a database it opened, from its alarm. */
 const PRUNE_EVERY_MS = 600_000;
 /**
@@ -222,6 +224,9 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
   readonly #alarm: ObjectAlarm;
   /** What the application's database brings, of one of `reactiveDb`'s: its log. */
   readonly #host: DatabaseHost | undefined;
+  /** The object's storage, and the build it runs: what notes the log it made (`LOG_MADE`). */
+  readonly #storage: DurableObjectStorage;
+  readonly #buildId: string | undefined;
   /** Whether the database's change log is made, and its making under way, and since when. */
   #open = false;
   #opening: Promise<void> | undefined;
@@ -234,8 +239,18 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
   constructor(ctx: DurableObjectState, env: AuthorityEnv, setup: AuthoritySetup) {
     super(ctx, env);
     this.#host = hostOf(setup.database);
+    this.#storage = ctx.storage;
+    this.#buildId = setup.buildId;
     const host = this.#host;
     if (host !== undefined) {
+      // A log this object made for this build is there: it is made again beside the calls, as a
+      // migration may have dropped what makes it log, and no call waits for a round trip of D1's
+      // before its first byte. It is taken for unmade where that fails, and asked for as it was.
+      if (setup.buildId !== undefined && ctx.storage.kv.get(LOG_MADE) === setup.buildId) {
+        this.#open = true;
+        // eslint-disable-next-line sonarjs/no-async-constructor -- begun here, ended beside the calls
+        ctx.waitUntil(this.#remade(host));
+      }
       // As Cloudflare starts an object: each call waits for what `blockConcurrencyWhile` runs, and
       // `#opened` rejects nothing, which would reset the object, nor waits past the time Cloudflare
       // resets it at.
@@ -294,6 +309,22 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
   }
 
   /**
+   * Makes the change log again, of an object that made it before: say where it cannot, and have the
+   * next call that asks for it make it, as of a log never made.
+   */
+  async #remade(host: DatabaseHost): Promise<void> {
+    try {
+      await host.open();
+    } catch (error) {
+      this.#open = false;
+      // eslint-disable-next-line no-console
+      console.error(
+        `The change log of the application's database could not be made again: ${describeThrown(error)}. Run the application's migrations: the next render makes it.`,
+      );
+    }
+  }
+
+  /**
    * Makes the change log of the database, of one of `reactiveDb`'s, unless it is made: where it
    * cannot be, of tables the application's migrations have not made yet, says why, and asks again
    * at the next render — a page's first call, a route's root's (`renderShared`) too — or alarm —
@@ -311,6 +342,7 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
           try {
             await host.open();
             this.#open = true;
+            if (this.#buildId !== undefined) this.#storage.kv.put(LOG_MADE, this.#buildId);
           } catch (error) {
             // eslint-disable-next-line no-console
             console.error(
@@ -334,6 +366,9 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
         this.#opening = undefined;
       }
     })();
+    // The log is there (made before, as far as it is known): what is still made, the alarm, goes on
+    // beside the call.
+    if (this.#open) return;
     // Of every call that asks, `OPEN_WAIT_MS` at most of its making's start: past it, the calls go
     // on as it is made.
     await within(this.#opening, this.#openingSince + OPEN_WAIT_MS - Date.now());
