@@ -4,6 +4,7 @@ import { pgTable, text } from 'drizzle-orm/pg-core';
 import { Client, Pool } from 'pg';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
+import { scopedAfter } from '../src/sql/guards.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { engineOf } from './support/drizzle.ts';
 
@@ -142,4 +143,122 @@ describe('a render through a connection whose transaction set a setting for itse
     },
     TEST_TIMEOUT_MS,
   );
+});
+
+describe('a render through a connection whose transaction that set a setting ended', () => {
+  it.each([
+    [['COMMIT', 'BEGIN']],
+    [['ROLLBACK', 'BEGIN']],
+    [['COMMIT;', 'BEGIN']],
+    [['END', 'BEGIN']],
+    [['ABORT', 'BEGIN']],
+    [['COMMIT WORK', 'BEGIN']],
+    [['SET LOCAL search_path = other; COMMIT', 'BEGIN']],
+    [['SELECT 1; ROLLBACK', 'BEGIN']],
+    [['COMMIT AND CHAIN']],
+    [['COMMIT', 'BEGIN', 'SELECT 1']],
+  ])(
+    'is read through the next one, which set nothing, after %j',
+    async (after) => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+      await connection.query('BEGIN');
+      await connection.query('SET LOCAL search_path = other');
+      for (const statement of after) await connection.query(statement);
+
+      await expect(ofHeld()).resolves.toContain('a,b');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'is refused again where the next transaction sets one of its own',
+    async () => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+      for (const statement of [
+        'BEGIN',
+        'SET LOCAL statement_timeout = 5000',
+        'COMMIT',
+        'BEGIN',
+        'SET LOCAL search_path = other',
+      ]) {
+        await connection.query(statement);
+      }
+
+      await expect(ofHeld()).rejects.toThrow(REFUSED);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    [['SAVEPOINT s', 'ROLLBACK TO SAVEPOINT s']],
+    [['SAVEPOINT s', 'RELEASE SAVEPOINT s']],
+    [['SET TRANSACTION READ ONLY']],
+  ])(
+    'is refused still, after %j, which end no transaction',
+    async (after) => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+      await connection.query('BEGIN');
+      await connection.query('SET LOCAL search_path = other');
+      for (const statement of after) await connection.query(statement);
+
+      await expect(ofHeld()).rejects.toThrow(REFUSED);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'is read through the next to take the connection, where it was given back in its transaction',
+    async () => {
+      const setup = await pooled();
+      const first = await setup.tracked.connect();
+      await first.query('BEGIN');
+      await first.query('SET LOCAL search_path = other');
+      first.release();
+      const next = await setup.tracked.connect();
+      onTestFinished(() => {
+        next.release();
+      });
+      const ofNext = await rendering(setup, next);
+
+      await expect(ofNext()).resolves.toContain('a,b');
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('the transaction-local settings a text leaves', () => {
+  it.each([
+    ['SET LOCAL search_path = other', false, true],
+    ["SELECT set_config('search_path', 'other', true)", false, true],
+    ['SELECT 1', true, true],
+    ['SELECT 1', false, false],
+    ['COMMIT', true, false],
+    ['commit;', true, false],
+    ['END', true, false],
+    ['ABORT', true, false],
+    ['ROLLBACK', true, false],
+    ['COMMIT AND CHAIN', true, false],
+    ['COMMIT WORK', true, false],
+    ['SET LOCAL a = 1; COMMIT', false, false],
+    ['COMMIT; BEGIN; SET LOCAL a = 1', true, true],
+    ['SET LOCAL a = 1; SELECT 1', false, true],
+    ['ROLLBACK TO SAVEPOINT s', true, true],
+    ['ROLLBACK TO s', true, true],
+    ['ROLLBACK WORK TO SAVEPOINT s', true, true],
+    ['ROLLBACK AND CHAIN', true, false],
+    ["COMMIT PREPARED 'x'", true, true],
+    ["ROLLBACK PREPARED 'x'", true, true],
+    ["SELECT 'COMMIT; END'", true, true],
+    ['SELECT CASE WHEN true THEN 1 END', true, true],
+    ['DO $$ BEGIN PERFORM 1; END $$', true, true],
+    ['BEGIN', true, true],
+  ])('reads `%s` of %j as %j', (sql, before, after) => {
+    expect(scopedAfter(sql, true, before)).toBe(after);
+  });
 });
