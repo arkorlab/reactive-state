@@ -70,6 +70,7 @@ export function followSqlite<S extends Readonly<Record<string, unknown>>>(
   const byName = new Map<string, string>();
   const keysByTable = new Map<string, readonly SqliteKeyColumn[]>();
   const uniques = new Map<string, readonly (readonly string[])[]>();
+  const partials = new Map<string, readonly (readonly string[])[]>();
   const rowids = new Map<string, string | undefined>();
   const triggers = new Map<string, ReadonlyMap<string, string>>();
   const followed: FollowedSqliteTable[] = [];
@@ -96,6 +97,7 @@ export function followSqlite<S extends Readonly<Record<string, unknown>>>(
     byName.set(entry.name, name);
     keysByTable.set(name, keys);
     uniques.set(name, entry.uniques);
+    partials.set(name, entry.partials);
     rowids.set(name, entry.unreadUnique ? undefined : entry.rowid);
     triggers.set(name, sqliteTriggersOf(entry));
     followed.push(entry);
@@ -103,7 +105,7 @@ export function followSqlite<S extends Readonly<Record<string, unknown>>>(
   tables[schemaTable] = table({}, { external: storeName });
   const generation = generationOf(`d1:${storeName}`);
   const reads = { byName, keysByTable, schema: generation, schemaTable };
-  const store = { byName, keysByTable, rowids, schema: generation, triggers, uniques };
+  const store = { byName, keysByTable, partials, rowids, schema: generation, triggers, uniques };
   return Object.freeze({
     captureSql: () => sqliteCaptureSql(followed),
     client: <B extends D1Binding>(binding: B) => {

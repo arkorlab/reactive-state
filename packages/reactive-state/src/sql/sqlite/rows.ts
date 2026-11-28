@@ -13,6 +13,7 @@ import { type Named, rowsOf, type RowUpdate } from '../rows.ts';
 import { quoted } from './capture.ts';
 import type { D1Binding } from './client.ts';
 import type { SqliteKeyColumn } from './keys.ts';
+import { saidBy } from './sent.ts';
 import { sqliteKeyText } from './values.ts';
 
 /**
@@ -62,12 +63,6 @@ function imageOf(named: Named, keys: readonly SqliteKeyColumn[]): Readonly<Recor
     if (held !== undefined) image[key.field] = held;
   }
   return Object.freeze(image);
-}
-
-/** The text of `error`, and of what caused it, where D1 keeps the database's own. */
-function saidBy(error: unknown): string {
-  const cause: unknown = error instanceof Error ? error.cause : undefined;
-  return `${String(error)} ${String(cause)}`;
 }
 
 /**

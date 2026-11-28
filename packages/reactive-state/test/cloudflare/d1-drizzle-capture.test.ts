@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
-import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { followedSqliteTable, sqliteCaptureSql } from '../../src/sql/sqlite/capture.ts';
@@ -22,6 +23,33 @@ const tasks = sqliteTable(
   (table) => [index('tasks_project').on(table.projectId)],
 );
 const notes = sqliteTable('notes', { body: text() });
+/** The columns of a team's invitations. */
+const inviteColumns = {
+  id: text().primaryKey(),
+  team: text().notNull(),
+  account: text().notNull(),
+  status: text().notNull(),
+};
+/**
+ * A team's invitations: one pending of an account at most, and any number of what became of them,
+ * by team, which an index of all of the rows begins with.
+ */
+const invites = sqliteTable('invites', inviteColumns, (table) => {
+  return [
+    uniqueIndex('invites_pending')
+      .on(table.account, table.team)
+      .where(sql`${table.status} = 'pending'`),
+    index('invites_team').on(table.team),
+  ];
+});
+/** The same invitations of no index of all of the rows that begins with a column of the set. */
+const bare = sqliteTable('bare', inviteColumns, (table) => {
+  return [
+    uniqueIndex('bare_pending')
+      .on(table.account, table.team)
+      .where(sql`${table.status} = 'pending'`),
+  ];
+});
 const parents = sqliteTable('parents', { id: text().primaryKey() });
 const children = sqliteTable('children', {
   id: integer().primaryKey(),
@@ -167,6 +195,73 @@ describe('the change log of a Drizzle schema in D1', () => {
       id: 'row',
       tbl: 'children',
     });
+  });
+
+  it("logs each row a write meets by a unique index of part of the rows, but an update's own", async () => {
+    const db = env.REACTIVE_D1;
+    await db.batch(
+      [
+        'DROP TABLE IF EXISTS invites',
+        'CREATE TABLE invites (id TEXT PRIMARY KEY, team TEXT NOT NULL, account TEXT NOT NULL, status TEXT NOT NULL)',
+        "CREATE UNIQUE INDEX invites_pending ON invites (account, team) WHERE status = 'pending'",
+        'CREATE INDEX invites_team ON invites (team)',
+        "INSERT INTO invites VALUES ('x1', 't1', 'a1', 'pending'), ('x2', 't1', 'a1', 'canceled'), ('y1', 't2', 'a1', 'pending')",
+      ].map((statement) => db.prepare(statement)),
+    );
+    const followed = [followedSqliteTable('invites', invites, sqliteKeysOf(invites))];
+    await db.batch(sqliteCaptureSql(followed).map((statement) => db.prepare(statement)));
+    const at = await head();
+
+    // Of another account, meeting no row; of the account, meeting its rows in the team, whatever
+    // the condition says of them (`x2` is cancelled); then of the condition's column alone, meeting
+    // its other rows in the team.
+    await db.prepare("INSERT INTO invites VALUES ('x3', 't1', 'a2', 'pending')").run();
+    await db.prepare("INSERT INTO invites VALUES ('x4', 't1', 'a1', 'declined')").run();
+    await db.prepare("UPDATE invites SET status = 'declined' WHERE id = 'x2'").run();
+    const [x1, x2, x3, x4] = ['x1', 'x2', 'x3', 'x4'].map((id) => {
+      return {
+        k_account: id === 'x3' ? 'a2' : 'a1',
+        k_id: id,
+        k_team: 't1',
+      };
+    });
+
+    await expect(logged(at)).resolves.toStrictEqual([
+      { after: x3, before: null, id: 'row', tbl: 'invites' },
+      { after: null, before: x1, id: 'row', tbl: 'invites' },
+      { after: null, before: x2, id: 'row', tbl: 'invites' },
+      { after: x4, before: null, id: 'row', tbl: 'invites' },
+      { after: null, before: x1, id: 'row', tbl: 'invites' },
+      { after: null, before: x4, id: 'row', tbl: 'invites' },
+      { after: x2, before: x2, id: 'row', tbl: 'invites' },
+    ]);
+  });
+
+  it('logs a write of a unique index of part of the rows no index begins with as of the table', async () => {
+    const db = env.REACTIVE_D1;
+    await db.batch(
+      [
+        'DROP TABLE IF EXISTS bare',
+        'CREATE TABLE bare (id TEXT PRIMARY KEY, team TEXT NOT NULL, account TEXT NOT NULL, status TEXT NOT NULL)',
+        "CREATE UNIQUE INDEX bare_pending ON bare (account, team) WHERE status = 'pending'",
+      ].map((statement) => db.prepare(statement)),
+    );
+    const followed = [followedSqliteTable('bare', bare, sqliteKeysOf(bare))];
+    await db.batch(sqliteCaptureSql(followed).map((statement) => db.prepare(statement)));
+    const at = await head();
+
+    // Its rows met would be found by reading the whole table.
+    await db.prepare("INSERT INTO bare VALUES ('x1', 't1', 'a1', 'pending')").run();
+
+    await expect(logged(at)).resolves.toStrictEqual([
+      { after: null, before: null, id: '', tbl: 'bare' },
+      {
+        after: { k_account: 'a1', k_id: 'x1', k_team: 't1' },
+        before: null,
+        id: 'row',
+        tbl: 'bare',
+      },
+    ]);
   });
 
   it('logs a change of a table of no keys as of the table alone', async () => {

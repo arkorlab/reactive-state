@@ -11,8 +11,12 @@ import type { SqliteKeyColumn } from './keys.ts';
  * logs each change of the table alone. A statement of `REPLACE` deletes the rows its new row would
  * take the place of, with no trigger of the delete — SQLite's own, where `recursive_triggers` is
  * off — so before an insert or an update, each row its new values meet on a unique column set, or
- * on its `rowid`, is logged as deleted; a table of a unique index on an expression, or of part of
- * its rows, or whose `rowid` no name reads, logs its inserts and updates of the table alone. A table
+ * on its `rowid`, is logged as deleted. The triggers read no index's condition, so a unique index
+ * of part of the rows is met on its columns alone, whatever the condition says of the rows, and by
+ * each update, whatever it changes: one of the condition's columns alone may bring the row into the
+ * index. A table of a unique index on an expression, of one of part of the rows none of whose
+ * columns an index of all of them begins with — whose rows met would be found by reading the whole
+ * table — or whose `rowid` no name reads, logs its inserts and updates of the table alone. A table
  * the database makes `WITHOUT ROWID`, which Drizzle declares none of, has no `rowid` the triggers
  * read: its writes fail.
  */
@@ -37,7 +41,15 @@ export interface FollowedSqliteTable {
   readonly keys: readonly SqliteKeyColumn[];
   /** The column sets a row's new values may meet another's on: its primary and unique keys. */
   readonly uniques: readonly (readonly string[])[];
-  /** Whether a unique index of the table is of an expression or of part of its rows. */
+  /**
+   * The column sets of its unique indexes of part of its rows, which an update may meet another
+   * row on whatever it changes: of a column of the condition alone too.
+   */
+  readonly partials: readonly (readonly string[])[];
+  /**
+   * Whether a unique index of the table is of an expression, or of part of its rows and of columns
+   * no index of all of them begins with.
+   */
   readonly unreadUnique: boolean;
   /** The name the table's `rowid` is read by: one no column has; none where each is a column's. */
   readonly rowid: string | undefined;
@@ -67,18 +79,54 @@ function columnName(column: unknown): string | undefined {
   return typeof name === 'string' ? name : undefined;
 }
 
-/** The column sets of `table` a row's new values may meet another's on, and whether one is unread. */
-function uniquesOf(table: SQLiteTable): Pick<FollowedSqliteTable, 'uniques' | 'unreadUnique'> {
+/**
+ * The first column of each index of all of the rows `config` declares, its primary key's and its
+ * unique columns' too: a statement of a value of one of them reads the rows of that value alone.
+ */
+function leadingOf(config: ReturnType<typeof getTableConfig>): ReadonlySet<string> {
+  const leading = new Set<string>();
+  const first = (columns: readonly unknown[]): void => {
+    const name = columnName(columns[0]);
+    if (name !== undefined) leading.add(name);
+  };
+  for (const column of config.columns) {
+    if (column.primary || column.isUnique) leading.add(column.name);
+  }
+  for (const key of config.primaryKeys) first(key.columns);
+  for (const unique of config.uniqueConstraints) first(unique.columns);
+  for (const index of config.indexes) {
+    if (index.config.where === undefined) first(index.config.columns);
+  }
+  return leading;
+}
+
+/**
+ * The column sets of `table` a row's new values may meet another's on, and whether one is unread:
+ * of an expression, or of a unique index of part of the rows none of whose columns an index of all
+ * of them begins with. The trigger's statement of such a set, of no condition of the index's, is
+ * served by no index of part of the rows: it would read the whole table at each insert and update.
+ */
+function uniquesOf(
+  table: SQLiteTable,
+): Pick<FollowedSqliteTable, 'partials' | 'uniques' | 'unreadUnique'> {
   const config = getTableConfig(table);
+  const leading = leadingOf(config);
   const uniques: (readonly string[])[] = [];
+  const partials: (readonly string[])[] = [];
   let unreadUnique = false;
-  const add = (columns: readonly unknown[]): void => {
+  const add = (columns: readonly unknown[], partial = false): void => {
     const names = columns.map((column) => columnName(column));
     if (names.every((name) => name !== undefined)) {
-      uniques.push(names);
-    } else {
-      unreadUnique = true;
+      if (!partial) {
+        uniques.push(names);
+        return;
+      }
+      if (names.some((name) => leading.has(name))) {
+        partials.push(names);
+        return;
+      }
     }
+    unreadUnique = true;
   };
   for (const column of config.columns) {
     if (column.primary || column.isUnique) uniques.push([column.name]);
@@ -86,14 +134,9 @@ function uniquesOf(table: SQLiteTable): Pick<FollowedSqliteTable, 'uniques' | 'u
   for (const key of config.primaryKeys) add(key.columns);
   for (const unique of config.uniqueConstraints) add(unique.columns);
   for (const index of config.indexes) {
-    if (!index.config.unique) continue;
-    if (index.config.where === undefined) {
-      add(index.config.columns);
-    } else {
-      unreadUnique = true;
-    }
+    if (index.config.unique) add(index.config.columns, index.config.where !== undefined);
   }
-  return { uniques, unreadUnique };
+  return { partials, uniques, unreadUnique };
 }
 
 /** A followed table of `table`, declared as `declared`, of its keys `keys`. */
@@ -155,7 +198,9 @@ export function sqliteTriggersOf(table: FollowedSqliteTable): ReadonlyMap<string
   // table of no keys, its change of the table alone stands for them; of a unique index the
   // triggers cannot read, the table alone.
   // An update meets another row only where it changes the set's values: else the row is its own.
-  const meeting = (columns: readonly string[], onUpdate: boolean): string => {
+  // On the set of an index of part of the rows, whatever it changes — the condition's columns alone
+  // may bring the row into the index — any row but itself, told apart by the `rowid` (`apart`).
+  const meeting = (columns: readonly string[], onUpdate: boolean, apart?: string): string => {
     // Exactly, of the type and the bytes: a column's collation (`NOCASE`) may find `'A'` and `'a'`
     // one where the unique index finds them two.
     const kept = columns.map((column) => {
@@ -168,18 +213,25 @@ export function sqliteTriggersOf(table: FollowedSqliteTable): ReadonlyMap<string
     const same = columns
       .map((column) => `c.${quoted(column)} = NEW.${quoted(column)}`)
       .join(' AND ');
-    const moved = onUpdate ? ` AND NOT (${kept.join(' AND ')})` : '';
+    const others =
+      apart === undefined
+        ? ` AND NOT (${kept.join(' AND ')})`
+        : ` AND c.${quoted(apart)} IS NOT OLD.${quoted(apart)}`;
     return logged(
-      `SELECT ${literal(table.declared)}, ${literal(ROW)}, ${imageOf(table.keys, 'c')}, NULL, ${NOW_MS} FROM ${on} AS c WHERE ${same}${moved}`,
+      `SELECT ${literal(table.declared)}, ${literal(ROW)}, ${imageOf(table.keys, 'c')}, NULL, ${NOW_MS} FROM ${on} AS c WHERE ${same}${onUpdate ? others : ''}`,
     );
   };
   // Every rowid table's rows are unique by their `rowid`, which a `REPLACE` may name.
   const met = (onUpdate: boolean): string => {
     if (!keyed) return '';
+    const { rowid } = table;
     const statements =
-      table.unreadUnique || table.rowid === undefined
+      rowid === undefined || table.unreadUnique
         ? [whole]
-        : [...table.uniques, [table.rowid]].map((columns) => meeting(columns, onUpdate));
+        : [
+            ...[...table.uniques, [rowid]].map((columns) => meeting(columns, onUpdate)),
+            ...table.partials.map((columns) => meeting(columns, onUpdate, rowid)),
+          ];
     return `${statements.join('; ')};`;
   };
   const made = (event: (typeof EVENTS)[number], text: string): readonly [string, string] => {

@@ -15,6 +15,7 @@ import {
   wheresTogether,
 } from './reads.ts';
 import { type StatementRead, statementRead } from './scopes.ts';
+import { READS_ONLY, sentBy, sentToD1, sessionText } from './sent.ts';
 import {
   COLLATED,
   type ColumnTypes,
@@ -24,16 +25,8 @@ import {
   tablesNamed,
 } from './sources.ts';
 import { holdsKind } from './values.ts';
-import {
-  BYTE_ORDER_MARK,
-  type Conditions,
-  conditionsOf,
-  leadingWord,
-  namesPragmaFunction,
-  readsAlone,
-  soleStatement,
-  type Term,
-} from './where.ts';
+import { type Conditions, conditionsOf, leadingWord, readsAlone, type Term } from './where.ts';
+import { refusalOf, writes } from './words.ts';
 
 /**
  * A D1 binding whose statements a render runs note what they read of the followed tables: each
@@ -97,14 +90,6 @@ const LIMITS = { keptPlans: 1024, shownText: 80, unexplainedMs: 60_000 } as cons
 /** The schema's tables and indexes, by their root pages, and each table's own statement. */
 const SCHEMA_SQL =
   "SELECT type, name, tbl_name, rootpage, sql FROM sqlite_schema WHERE type IN ('table', 'index')";
-/**
- * The words a render's statement begins with: a query's, and a write's, which its plan refuses. A
- * text of another, of which `EXPLAIN` makes a statement of another kind, is refused by its words.
- */
-const STATEMENTS = new Set(['delete', 'insert', 'replace', 'select', 'update', 'values', 'with']);
-
-/** A statement that begins with `SELECT`, which writes nothing in SQLite. */
-const READS_ONLY = /^\s*select\b/iu;
 /** How many answers of a plan's batch come before its tables' columns: `EXPLAIN`, the schema. */
 const PLAN_ANSWERS = 2;
 
@@ -450,39 +435,6 @@ class SqlitePlans {
   }
 }
 
-/**
- * The fault of a render's statement its words refuse, before its plan is asked: a text of several
- * statements, which D1 runs each of; a `PRAGMA`, which sets the connection's flags as SQLite
- * compiles it — of its plan too; and a statement that names a `pragma_` function, of which
- * `pragma_optimize` writes as it is read, unseen by its plan.
- */
-function refusalOf(prepared: readonly Prepared[]): Error | undefined {
-  for (const { sql } of prepared) {
-    const shown = sql.slice(0, LIMITS.shownText);
-    const word = leadingWord(sql);
-    if (!soleStatement(sql)) {
-      return new Error(`A component runs one statement a text as it renders: ${shown}`);
-    }
-    // A space to SQLite where a token begins, and a name's character to this reading of it.
-    if (sql.includes(BYTE_ORDER_MARK)) {
-      return new Error(`A component runs no text of a byte order mark as it renders: ${shown}`);
-    }
-    if (word === 'pragma' || namesPragmaFunction(sql)) {
-      return new Error(`A component runs no PRAGMA as it renders: ${shown}`);
-    }
-    // Of another word, `EXPLAIN` of the text may be a statement of its own: `QUERY PLAN PRAGMA …`.
-    if (word === undefined || !STATEMENTS.has(word)) {
-      return new Error(`A component runs a query alone as it renders: ${shown}`);
-    }
-  }
-  return undefined;
-}
-
-/** The fault of a render's statement that writes. */
-function writes(sql: string): Error {
-  return new Error(`A component writes nothing as it renders: ${sql.slice(0, LIMITS.shownText)}`);
-}
-
 /** What a statement of the binding's is: its text, the values bound, and D1's own statement. */
 interface Prepared {
   readonly sql: string;
@@ -507,8 +459,9 @@ async function noted<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const note = tableReads();
-  if (note === undefined) return run();
-  const refused = refusalOf(prepared);
+  const texts = prepared.map((each) => each.sql);
+  if (note === undefined) return sentToD1(texts, run);
+  const refused = refusalOf(texts);
   if (refused !== undefined) {
     await note(() => Promise.reject(refused));
     throw refused;
@@ -588,7 +541,8 @@ function refusedInRender(
 ) {
   return (...args: unknown[]): unknown => {
     const note = tableReads();
-    if (note === undefined) return Reflect.apply(value, target, args);
+    if (note === undefined)
+      return sentBy(target, name, args, () => Reflect.apply(value, target, args));
     const refused = new Error(
       `A render runs no D1 \`${String(name)}\`: query by statements, which are followed.`,
     );
@@ -664,8 +618,14 @@ export function trackedD1<B extends D1Binding>(binding: B, followed: FollowedSql
           const own = prepared.filter((each) => each !== undefined);
           if (own.length < statements.length) {
             const note = tableReads();
-            if (note === undefined)
-              return target.batch(statements.map((each) => ownStatement(each)));
+            if (note === undefined) {
+              const texts = prepared.map(
+                (each, at) => each?.sql ?? sessionText(ownStatement(statements[at])),
+              );
+              return sentToD1(texts, () =>
+                target.batch(statements.map((each) => ownStatement(each))),
+              );
+            }
             const refused = new Error(
               'A render batches the statements of its tracked D1 binding alone.',
             );

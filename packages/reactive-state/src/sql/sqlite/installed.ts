@@ -4,21 +4,27 @@ import { bareOf } from './where.ts';
 /**
  * What the database holds of the followed tables that the triggers of `captureSql()` do not answer
  * for, as the store reads it once the schema's digest changes, off a render's path: the tables a
- * `REPLACE` may delete rows of that the triggers log not — by a unique index of part of the rows,
- * of an expression, of another collation than `BINARY`, of columns that hold none of the column
- * sets the triggers log the rows met on, or of a column `NOT NULL` of a default, which `REPLACE`
- * writes in place of a `NULL` after the triggers before it read the `NULL`; or by the `rowid`,
- * where a column of the database has the name the triggers read it by — and the tables whose
- * triggers are not those `captureSql()` makes: missing, of before (an index made unique since), or
- * rewritten by SQLite (a column renamed), which log what they should not, or nothing.
+ * `REPLACE` may delete rows of that the triggers log not — by a unique index of an expression, of
+ * another collation than `BINARY`, of columns that hold none of the column sets the triggers log
+ * the rows met on (of an index of part of the rows, none of those they log by every update, as its
+ * condition's columns alone may bring a row into it), or of a column `NOT NULL` of a default, which
+ * `REPLACE` writes in place of a `NULL` after the triggers before it read the `NULL`; or by the
+ * `rowid`, where a column of the database has the name the triggers read it by — and the tables
+ * whose triggers are not those `captureSql()` makes: missing, of before (an index made unique
+ * since), or rewritten by SQLite (a column renamed), which log what they should not, or nothing.
  */
 
 /** What the database is held to of each followed table, by its declared name. */
 export interface FollowedInstall {
   /** The table each followed table of the database is declared as, by its name in the database. */
   readonly byName: ReadonlyMap<string, string>;
-  /** The column sets the triggers log the rows met on. */
+  /** The column sets the triggers log the rows met on, by an update of the set's values. */
   readonly uniques: ReadonlyMap<string, readonly (readonly string[])[]>;
+  /**
+   * The column sets the triggers log the rows met on by every update, whatever it changes: of the
+   * unique indexes of part of the rows.
+   */
+  readonly partials: ReadonlyMap<string, readonly (readonly string[])[]>;
   /** The name the triggers read the `rowid` by, where they read it. */
   readonly rowids: ReadonlyMap<string, string | undefined>;
   /** The triggers `captureSql()` makes, by their names: each one's statement. */
@@ -135,12 +141,14 @@ interface UniqueIndex {
   readonly table: string;
   readonly index: string;
   readonly columns: Columns;
+  /** Whether it is of part of the rows: of a condition. */
+  readonly partial: boolean;
 }
 
 /**
- * The unique indexes of each table of `names` of all of its rows, which are asked of, as the
- * answers `asked` say — `PRAGMA index_list` and `table_xinfo` of each, in turn; the tables
- * `replacing` takes of a unique index of part of the rows, or whose rowid's name is a column's.
+ * The unique indexes of each table of `names`, which are asked of, as the answers `asked` say —
+ * `PRAGMA index_list` and `table_xinfo` of each, in turn; the tables `replacing` takes whose
+ * rowid's name is a column's.
  */
 function uniqueIndexesOf(
   asked: readonly unknown[],
@@ -156,11 +164,12 @@ function uniqueIndexesOf(
     const rows = rowsOf(asked[at * 2]);
     for (const row of rows) {
       if (Number(row['unique']) !== 1) continue;
-      if (Number(row['partial']) === 0) {
-        indexes.push({ columns, index: String(row['name']), table });
-      } else {
-        replacing.add(table);
-      }
+      indexes.push({
+        columns,
+        index: String(row['name']),
+        partial: Number(row['partial']) !== 0,
+        table,
+      });
     }
   }
   return indexes;
@@ -187,13 +196,13 @@ async function replacingOf(
   const infos = await binding.batch(
     indexes.map(({ index }) => prepare(`PRAGMA index_xinfo(${quoted(index)})`)),
   );
-  for (const [at, { columns, table }] of indexes.entries()) {
+  for (const [at, { columns, partial, table }] of indexes.entries()) {
     const indexed = indexColumnsOf(infos[at]);
-    if (
-      indexed === undefined ||
-      defaultedOf(indexed, columns) ||
-      !metOn(followed.uniques.get(table) ?? [], indexed)
-    ) {
+    // An index of part of the rows, of a set the triggers log the rows met on by every update: its
+    // condition's columns alone may bring a row into it.
+    const partials = followed.partials.get(table) ?? [];
+    const sets = partial ? partials : [...(followed.uniques.get(table) ?? []), ...partials];
+    if (indexed === undefined || defaultedOf(indexed, columns) || !metOn(sets, indexed)) {
       replacing.add(table);
     }
   }

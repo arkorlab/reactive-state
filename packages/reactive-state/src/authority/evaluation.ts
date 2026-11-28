@@ -279,10 +279,13 @@ export function renderEvaluation(
 /**
  * What a server operation reads and writes outside its transaction: the committed records, noted
  * nowhere — nothing renders an operation again — and no write: those are made in `transaction`.
+ * Each statement its code sends that may write a table of the application's own is told to
+ * `externalWrite` first.
  */
 export function operationEvaluation(
   scope: Scope,
   transaction: <T>(body: () => Promise<T>) => Promise<T>,
+  externalWrite?: Evaluation['externalWrite'],
 ): Evaluation {
   const why = 'a server operation writes in its transaction, `db.transaction(async () => …)`';
   return {
@@ -290,6 +293,7 @@ export function operationEvaluation(
     delete: (table) => {
       throw misuse(scope, `db.${table}.delete`, why);
     },
+    externalWrite,
     insert: (table) => {
       throw misuse(scope, `db.${table}.insert`, why);
     },
@@ -302,9 +306,14 @@ export function operationEvaluation(
 
 /**
  * What an operation's transaction reads and writes: its reads see its writes, and its writes wait
- * in it. It opens no other transaction inside it.
+ * in it. It opens no other transaction inside it. A statement its code sends that may write a table
+ * of the application's own is the operation's, told to `externalWrite` as outside it.
  */
-export function transactionEvaluation(scope: Scope, transaction: Transaction): Evaluation {
+export function transactionEvaluation(
+  scope: Scope,
+  transaction: Transaction,
+  externalWrite?: Evaluation['externalWrite'],
+): Evaluation {
   return {
     ...reads(scope, { source: transaction, tables: scope.tables, track: undefined }),
     delete: (table, id) => {
@@ -312,6 +321,7 @@ export function transactionEvaluation(scope: Scope, transaction: Transaction): E
         transaction.delete(table, id);
       });
     },
+    externalWrite,
     insert: (table, fields) => scope.call.answer(() => transaction.insert(table, fields)),
     transaction: () => {
       return Promise.reject(
