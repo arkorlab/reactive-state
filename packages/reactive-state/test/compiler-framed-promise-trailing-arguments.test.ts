@@ -114,11 +114,13 @@ const CASES = [
     refused: true,
   },
   {
-    id: 'then-quiet-alias-spread-tail-pin',
+    // Resolving the receiver may run code before the captured alias is spread. Its contents
+    // are unresolved at this diagnostic boundary; the fresh inline literal above stays known.
+    id: 'then-alias-spread-after-call-boundary-pin',
     source:
       'type Then=(fulfilled?:undefined,rejected?:undefined,...tail:unknown[])=>Promise<Error>;const tail=[undefined,1] as const;async function frames(error:Error){return(await (Promise.resolve(error).then as Then)(undefined,undefined,...tail)).stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: true,
+    refused: false,
   },
   {
     id: 'finally-no-tail-pin',

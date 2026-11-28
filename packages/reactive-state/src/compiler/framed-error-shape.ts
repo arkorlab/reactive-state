@@ -14,7 +14,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameMemberName } from './framed-bindings.ts';
-import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
+import { framedAppliedPrefix, framedArgumentPrefix } from './framed-keys.ts';
 import { framedPresenceTarget } from './framed-presence-targets.ts';
 import { framedProxyFixedKeys } from './framed-proxy-key-shapes.ts';
 import { framedProxyShapeTarget } from './framed-proxy-shape-targets.ts';
@@ -61,10 +61,12 @@ export function framedErrorShape(
   const selected = shapeCall(node);
   if (selected === undefined) return undefined;
   const member = selected.kind === 'member';
-  const of = member ? selected.receiver : selected.args.values[0];
+  const targets = member
+    ? { of: selected.receiver, alternatives: selected.alternatives }
+    : argumentTarget(selected.args);
+  const { of, alternatives } = targets;
   if (of === undefined) return undefined;
-  if (selected.kind === 'keys') return keyShape(of, node, selected.args);
-  const alternatives = member ? selected.alternatives : selected.args.alternatives;
+  if (selected.kind === 'keys') return keyShape(of, node, selected.args, alternatives);
   const key = selected.args.values[member ? 0 : 1];
   if (key === undefined && !selected.args.unknown) return undefined;
   const names = key === undefined ? undefined : presenceNames(key, frames);
@@ -73,18 +75,33 @@ export function framedErrorShape(
     : { of: framedProxyShapeTarget(of, node, 'own', key) ?? of, names, alternatives };
 }
 
+/**
+ * The target a native reflection takes first, and its alternatives: past a prefix that ends before
+ * it, what the positions there may hold (`framedArgumentPrefix`'s alternatives), the first in turn.
+ */
+function argumentTarget(args: Prefix): {
+  readonly of: Expression | undefined;
+  readonly alternatives: readonly Expression[] | undefined;
+} {
+  const [first] = args.values;
+  if (first !== undefined || !args.unknown) return { of: first, alternatives: args.alternatives };
+  const [of, ...alternatives] = args.alternatives ?? [];
+  return { of, alternatives };
+}
+
 /** A closed ownKeys trap supplies the key list before the target's native shape is considered. */
 function keyShape(
   of: Expression,
   node: CallExpression,
   args: Prefix,
+  alternatives: readonly Expression[] | undefined,
 ): ShapeObservation | undefined {
-  if (args.alternatives === undefined && !args.unknown && framedProxyFixedKeys(of, node))
+  if (alternatives === undefined && !args.unknown && framedProxyFixedKeys(of, node))
     return undefined;
   return {
     of: framedProxyShapeTarget(of, node, 'keys') ?? of,
     names: undefined,
-    alternatives: args.alternatives,
+    alternatives,
   };
 }
 
@@ -116,7 +133,7 @@ function shapeCall(call: CallExpression): ShapeCall | undefined {
     const kind = target === undefined ? undefined : shapeKind(target);
     return kind === undefined || receiver === undefined
       ? undefined
-      : { kind, receiver, args: appliedPrefix(call, applied) };
+      : { kind, receiver, args: appliedPrefix(call, applied, prefix.unknown) };
   }
   if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return undefined;
   const method = frameMemberName(callee);
@@ -127,17 +144,29 @@ function shapeCall(call: CallExpression): ShapeCall | undefined {
   const [receiver, applied] = prefix.values;
   if (receiver === undefined) return undefined;
   const args =
-    method === 'call'
-      ? { values: prefix.values.slice(1), unknown: prefix.unknown }
-      : appliedPrefix(call, applied);
+    method === 'call' ? afterReceiver(prefix) : appliedPrefix(call, applied, prefix.unknown);
   return { kind, receiver, args, alternatives: prefix.alternatives };
 }
 
-/** An unchanged applied tuple keeps its entries; an opaque list leaves the key possible. */
-function appliedPrefix(call: CallExpression, applied: Expression | undefined): Prefix {
-  if (applied === undefined) return { values: [], unknown: false };
-  const args = framedAppliedArguments(call, applied);
-  return args === undefined ? { values: [], unknown: true } : framedArgumentPrefix(call, args);
+/** A call's arguments past its receiver, with what the positions past its prefix may hold. */
+function afterReceiver(prefix: Prefix): Prefix {
+  const values = prefix.values.slice(1);
+  return prefix.alternatives === undefined
+    ? { values, unknown: prefix.unknown }
+    : { values, unknown: prefix.unknown, alternatives: prefix.alternatives };
+}
+
+/**
+ * An unchanged applied tuple keeps its entries, and one past code the call may run first what it was
+ * written with (`framedAppliedPrefix`); an opaque list leaves the key possible, and so does a list
+ * the call's prefix ends before (`unknown`): it is not shown, where one never handed on is absent.
+ */
+function appliedPrefix(
+  call: CallExpression,
+  applied: Expression | undefined,
+  unknown: boolean,
+): Prefix {
+  return applied === undefined ? { values: [], unknown } : framedAppliedPrefix(call, applied);
 }
 
 /** Whole immutable aliases retain an unshadowed native reflection operation. */

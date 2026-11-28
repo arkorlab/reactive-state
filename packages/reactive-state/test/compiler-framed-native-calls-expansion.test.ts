@@ -49,7 +49,8 @@ describe('a chain of constants that each spread the one before twice', () => {
     const source =
       'function frames(target: any) { const list = [{ a: 1 }]; const copy = [...list]; Object.assign(target, ...list, ...copy); }';
 
-    expect(argumentsOf(source)).toStrictEqual(['target', '...list', '...list']);
+    // A spread past an exposed list is no quiet argument here (`quietArgument`): `...copy` stays.
+    expect(argumentsOf(source)).toStrictEqual(['target', '...list', '...copy']);
   });
 });
 

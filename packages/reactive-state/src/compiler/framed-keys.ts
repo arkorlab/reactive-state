@@ -8,28 +8,17 @@ import {
   isBinaryExpression,
   isBindingElement,
   isComputedPropertyName,
-  isConditionalExpression,
   isElementAccessExpression,
-  isExpression,
-  isForInStatement,
-  isForOfStatement,
-  type Identifier,
   isIdentifier,
-  isLiteralTypeNode,
   isObjectBindingPattern,
+  isOmittedExpression,
   isParameterDeclaration,
-  isParenthesizedTypeNode,
-  isPostfixUnaryExpression,
-  isPrefixUnaryExpression,
+  isSourceFile,
   isSpreadElement,
-  isUnionTypeNode,
   isVariableDeclaration,
-  isVariableDeclarationList,
   type NewExpression,
   type Node,
   SyntaxKind,
-  type TypeNode,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -40,11 +29,11 @@ import {
   type FrameBinding,
   frameBindingContainer,
   frameBindingOf,
-  frameDeclarationOf,
   frameMemberName,
   type FrameSelection,
 } from './framed-bindings.ts';
-import { framedCondition } from './framed-sources.ts';
+import { constantKeys, framedKeyNames, TARGET_WRITES } from './framed-key-names.ts';
+import { framedQuietCallee, framedQuietValue } from './framed-quiet-values.ts';
 import {
   APPLICATION_WORK,
   callWorkExposure,
@@ -52,23 +41,12 @@ import {
   namedElsewhere,
   tupleBindingExposure,
 } from './framed-tuple-work.ts';
-import {
-  framedAssignedValues,
-  framedPossibleBranch,
-  repeatedBodyRead,
-  repeatedFrameRead,
-} from './framed-writes.ts';
+import { framedPossibleBranch, repeatedBodyRead, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { bindingIdentifiers } from './scope.ts';
+
+export { framedKeyNames } from './framed-key-names.ts';
 
 /** Finite written property keys, and a binding's receiver before its final computed key. */
-
-const TARGET_WRITES: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.EqualsToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-]);
 
 /** Work before the call that exposes a tuple wherever it stands: a call, a construction, a read. */
 const PRIOR_WORK: ReadonlySet<SyntaxKind> = new Set([
@@ -110,15 +88,35 @@ interface ArgumentArray {
  * The first target and key of a native call, never shifting arguments past an unresolved spread.
  * Any use that may run before the call exposes a spread array — one written before it, one in what a
  * destructuring pattern around the call destructures, or one in a loop's condition or update on the
- * next pass — and an exposed prefix keeps its original and written targets. A reader whose proof an
- * exposure drops passes `reached` false, to count only uses that run before it as written or in a
- * body that repeats it.
+ * next pass — and an exposed prefix keeps its original and written targets. A spread past code the
+ * call itself may run first ends the prefix (`readInOrder`), since that code may change the array in
+ * any way, and keeps what the positions from it may hold as alternatives
+ * (`reorderedArgumentPrefix`). A reader whose proof an exposure drops passes `reached` false, to
+ * count only uses that run before it as written or in a body that repeats it.
  */
 export function framedArgumentPrefix(
   call: CallExpression | NewExpression,
   given: readonly Expression[] = call.arguments ?? [],
   limit = 2,
   reached = true,
+): ArgumentPrefix {
+  return argumentPrefix(call, given, limit, { reached, ordered: true });
+}
+
+interface PrefixContext {
+  readonly reached: boolean;
+  readonly ordered: boolean;
+}
+
+/**
+ * The prefix of `framedArgumentPrefix`. One not `ordered` leaves what the call evaluates before a
+ * spread to its caller, which has found that quiet.
+ */
+function argumentPrefix(
+  call: CallExpression | NewExpression,
+  given: readonly Expression[],
+  limit: number,
+  context: PrefixContext,
 ): ArgumentPrefix {
   const values: Expression[] = [];
   const pending: ArgumentWork[] = [];
@@ -132,8 +130,17 @@ export function framedArgumentPrefix(
       values.push(each.node);
       continue;
     }
-    const selected = argumentArray(each.node.expression, each.seen, call, reached);
+    const { expression } = each.node;
+    const selected = argumentArray(expression, each.seen, call, context.reached);
     if (selected === undefined) return { values, unknown: true };
+    if (context.ordered && !readInOrder(call, each.node, expression, context.reached)) {
+      const rest = [...selected.array.elements, ...pending.toReversed().map((work) => work.node)];
+      return reorderedArgumentPrefix(values, rest, call, {
+        reached: context.reached,
+        aliases: selected.seen,
+        spread: each.node,
+      });
+    }
     if (selected.exposed) return exposedArgumentPrefix(values, selected, call, each.node);
     for (const node of selected.array.elements.toReversed())
       pending.push({ node, seen: selected.seen });
@@ -141,9 +148,38 @@ export function framedArgumentPrefix(
   return { values, unknown: false };
 }
 
+interface ReorderedContext {
+  readonly reached: boolean;
+  readonly aliases: ReadonlySet<FrameBinding>;
+  /** The spread, or the apply tuple, that the prefix ends at. */
+  readonly spread: Node;
+}
+
 /**
- * An unchanged apply tuple retains its runtime entries through the existing argument-array proof.
- * A reader whose proof an exposure drops passes `reached` false, as for `framedArgumentPrefix`.
+ * A prefix that ends at a spread past code the call may run first, which may have changed the
+ * spread's array in any way: no position from it is known, but what the array was written with,
+ * each later argument and the array's written replacements stay possible there, as alternatives —
+ * `Object.getOwnPropertyNames.call(ignore(), ...args)` may still read what `args` was written with.
+ */
+function reorderedArgumentPrefix(
+  values: readonly Expression[],
+  rest: readonly Expression[],
+  call: CallExpression | NewExpression,
+  context: ReorderedContext,
+): ArgumentPrefix {
+  const later = argumentPrefix(call, rest, Infinity, { reached: context.reached, ordered: false });
+  const alternatives = [
+    ...later.values,
+    ...(later.alternatives ?? []),
+    ...tupleTargetWrites(context.aliases, call, context.spread),
+  ];
+  return { values, unknown: true, alternatives };
+}
+
+/**
+ * An unchanged apply tuple retains its runtime entries through the existing argument-array proof,
+ * where nothing the call evaluates before it may change it (`readInOrder`). A reader whose proof an
+ * exposure drops passes `reached` false, as for `framedArgumentPrefix`.
  */
 export function framedAppliedArguments(
   call: CallExpression,
@@ -151,7 +187,104 @@ export function framedAppliedArguments(
   reached = true,
 ): readonly Expression[] | undefined {
   const selected = argumentArray(expression, new Set(), call, reached);
-  return selected === undefined || selected.exposed ? undefined : selected.array.elements;
+  if (selected === undefined || selected.exposed) return undefined;
+  return readInOrder(call, expression, expression, reached) ? selected.array.elements : undefined;
+}
+
+/**
+ * An apply tuple's entries as a prefix of `limit` values: those of `framedAppliedArguments`; past
+ * code the call may run first, none in a known position, with what the tuple was written with as
+ * alternatives, as `framedArgumentPrefix` keeps them; and none of a tuple the compile cannot read.
+ */
+export function framedAppliedPrefix(
+  call: CallExpression,
+  expression: Expression,
+  limit = 2,
+  reached = true,
+): ArgumentPrefix {
+  const selected = argumentArray(expression, new Set(), call, reached);
+  if (selected === undefined || selected.exposed) return { values: [], unknown: true };
+  const { elements } = selected.array;
+  if (readInOrder(call, expression, expression, reached))
+    return framedArgumentPrefix(call, elements, limit, reached);
+  return reorderedArgumentPrefix([], elements, call, {
+    reached,
+    aliases: selected.seen,
+    spread: expression,
+  });
+}
+
+/** What holds a spread or an apply tuple, read past up to the call that holds it. */
+const READ_PAST: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AsExpression,
+  SyntaxKind.NonNullExpression,
+  SyntaxKind.ParenthesizedExpression,
+  SyntaxKind.SatisfiesExpression,
+  SyntaxKind.SpreadElement,
+]);
+
+/**
+ * Whether an array a call reads at `node` — a spread of `expression`, or an apply tuple — holds
+ * what it was written with, as far as the call's own work goes. A literal written in place does,
+ * whatever ran before it. A constant's array does where nothing the call evaluates before the node
+ * may run code, which might change it: `f((args.push(error), 0), ...args)` spreads one more than
+ * `args` was written with. That is the call's callee (`framedQuietCallee`), each argument before
+ * the node's, and each element before it of a literal written in place around it
+ * (`quietArgument`). A node outside the call, in a constant's array, has none of the call's work
+ * before it.
+ */
+function readInOrder(
+  call: CallExpression | NewExpression,
+  node: Expression,
+  expression: Expression,
+  reached: boolean,
+): boolean {
+  if (isArrayLiteralExpression(unwrapped(expression))) return true;
+  if (node.pos < call.pos || node.end > call.end) return true;
+  let child: Node = node;
+  for (let parent = node.parent; parent !== call; child = parent, parent = parent.parent) {
+    if (isSourceFile(parent)) return true;
+    if (isArrayLiteralExpression(parent)) {
+      if (!quietUntil(call, parent.elements, child, reached)) return false;
+    } else if (!READ_PAST.has(parent.kind)) {
+      return false;
+    }
+  }
+  return (
+    framedQuietCallee(call.expression) && quietUntil(call, call.arguments ?? [], child, reached)
+  );
+}
+
+/** Whether each item of a list before the one that holds a node runs no code (`quietArgument`). */
+function quietUntil(
+  call: CallExpression | NewExpression,
+  items: readonly Expression[],
+  child: Node,
+  reached: boolean,
+): boolean {
+  for (const each of items) {
+    if (each === child) return true;
+    if (!quietArgument(call, each, reached)) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether evaluating an argument, or an element of a literal written in place, runs no code: a
+ * hole, a quiet value (`framedQuietValue`), or a spread of a literal written in place of such
+ * items, or of a constant's array the compile expands whole.
+ */
+function quietArgument(
+  call: CallExpression | NewExpression,
+  node: Expression,
+  reached: boolean,
+): boolean {
+  if (isOmittedExpression(node)) return true;
+  if (!isSpreadElement(node)) return framedQuietValue(node);
+  const array = unwrapped(node.expression);
+  if (isArrayLiteralExpression(array))
+    return array.elements.every((each) => quietArgument(call, each, reached));
+  return !argumentPrefix(call, [node], Infinity, { reached, ordered: false }).unknown;
 }
 
 /** An exposed array retains its original and written replacement targets, but proves no key. */
@@ -353,224 +486,6 @@ function computedBindingKey(node: Node): Expression | undefined {
     isComputedPropertyName(node.propertyName)
     ? node.propertyName.expression
     : undefined;
-}
-
-interface KeyWork {
-  readonly node: Expression;
-  readonly seen: ReadonlySet<Node>;
-  readonly fallback: readonly string[] | undefined;
-}
-
-/**
- * Written conditional alternatives, constants and literal key annotations keep their finite names.
- * A value is followed once under each declared bound, whichever way it is reached, so that aliases
- * that converge cost no more than a chain.
- */
-export function framedKeyNames(key: Expression): readonly string[] | undefined {
-  const names = new Set<string>();
-  const followed = new Map<Node, Set<string>>();
-  const pending: KeyWork[] = [{ node: key, seen: new Set(), fallback: undefined }];
-  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const step = keyStep(each, followed);
-    if (step === undefined) return undefined;
-    for (const name of step.names) names.add(name);
-    pending.push(...step.next);
-  }
-  return [...names];
-}
-
-/** Whether `value` was followed already under the declared names `fallback`; it is marked followed. */
-function wasFollowed(
-  value: Node,
-  fallback: readonly string[] | undefined,
-  followed: Map<Node, Set<string>>,
-): boolean {
-  const bound = JSON.stringify(fallback ?? null);
-  const known = followed.get(value) ?? new Set<string>();
-  followed.set(value, known);
-  if (known.has(bound)) return true;
-  known.add(bound);
-  return false;
-}
-
-/** A source-proven value takes precedence over a literal annotation; opaque values keep its bound. */
-function keyStep(
-  each: KeyWork,
-  followed: Map<Node, Set<string>>,
-): { readonly names: readonly string[]; readonly next: readonly KeyWork[] } | undefined {
-  const value = unwrapped(each.node);
-  if (each.seen.has(value)) return undefined;
-  if (wasFollowed(value, each.fallback, followed)) return { names: [], next: [] };
-  const seen = new Set(each.seen).add(value);
-  if (isConditionalExpression(value)) {
-    const condition = framedCondition(value.condition);
-    let branches = [value.whenTrue, value.whenFalse];
-    if (condition !== undefined) branches = [condition ? value.whenTrue : value.whenFalse];
-    return {
-      names: [],
-      next: branches.map((node) => ({ ...each, node, seen })),
-    };
-  }
-  const selected = keyAlternatives(value);
-  if (selected === undefined)
-    return each.fallback === undefined ? undefined : { names: each.fallback, next: [] };
-  if ('names' in selected) return { names: selected.names, next: [] };
-  const fallback = selected.fallback ?? each.fallback;
-  return {
-    names: selected.callerNames ?? [],
-    next: selected.values.map((node) => ({ node, seen, fallback })),
-  };
-}
-
-/** One key expression's literal names or source-constant alternatives, in its own lexical scope. */
-function keyAlternatives(value: Expression):
-  | { readonly names: readonly string[] }
-  | {
-      readonly values: readonly Expression[];
-      readonly fallback: readonly string[] | undefined;
-      readonly callerNames?: readonly string[];
-    }
-  | undefined {
-  const literal = constantValue(value);
-  if (literal !== undefined) return { names: [String(literal)] };
-  if (!isIdentifier(value)) return undefined;
-  const binding = frameBindingOf(value);
-  if (binding === undefined || binding.keys.length > 0) return undefined;
-  const names = declaredKeys(binding.binding);
-  const values = constantKeys(binding.binding);
-  if (values !== undefined) return { values, fallback: names };
-  if (names === undefined) return undefined;
-  const again = redeclarations(value, binding.binding);
-  const sources = [...initializersOf([binding.binding, ...again]), ...framedAssignedValues(value)];
-  const declared =
-    isParameterDeclaration(binding.binding) ||
-    again.length > 0 ||
-    changedBeyondSources(value, binding.binding);
-  return sources.length === 0
-    ? { names }
-    : { values: sources, fallback: names, callerNames: declared ? names : [] };
-}
-
-/** The values that declarations of one variable write where they name it whole. */
-function initializersOf(declarations: readonly FrameBinding[]): readonly Expression[] {
-  const values: Expression[] = [];
-  for (const declaration of declarations) {
-    if (isIdentifier(declaration.name) && declaration.initializer !== undefined)
-      values.push(declaration.initializer);
-  }
-  return values;
-}
-
-/**
- * The declarations of `binding`'s variable beyond the one a name resolves to, the first: a `var`
- * declared again in its scope — in a block, a `for` head, a `switch` case or a `catch` block, or
- * beside a parameter of its name — writes it where it stands. Its initializer is a source where it
- * names the variable whole; a pattern or a loop head writes what no initializer says, and
- * `keyAlternatives` keeps the names the declared type allows wherever there is one.
- */
-function redeclarations(name: Identifier, binding: FrameBinding): readonly VariableDeclaration[] {
-  const found: VariableDeclaration[] = [];
-  const pending: Node[] = [name.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (
-      node !== binding &&
-      isVariableDeclaration(node) &&
-      bindingIdentifiers(node.name).some(
-        (bound) => bound.text === name.text && frameDeclarationOf(bound) === binding,
-      )
-    )
-      found.push(node);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return found;
-}
-
-/**
- * Whether the code changes `binding` where no expression writes the value it takes: a compound
- * assignment, an update or a `for…in` binding. What it is assigned (`framedAssignedValues`) is
- * then not all it may be: the names its declared type allows are possible too, beside what is
- * assigned.
- */
-function changedBeyondSources(name: Identifier, binding: FrameBinding): boolean {
-  const pending: Node[] = [name.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    const target = changedTarget(node);
-    const selected =
-      target !== undefined && isIdentifier(target) ? frameBindingOf(target) : undefined;
-    if (selected?.binding === binding && selected.keys.length === 0) return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
-}
-
-/** What a compound assignment, an update or a `for…in` binding changes, where it is written. */
-function changedTarget(node: Node): Expression | undefined {
-  if (isBinaryExpression(node)) {
-    const { kind } = node.operatorToken;
-    const compound =
-      kind >= SyntaxKind.FirstAssignment &&
-      kind <= SyntaxKind.LastAssignment &&
-      !TARGET_WRITES.has(kind);
-    return compound ? unwrapped(node.left) : undefined;
-  }
-  if (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node))
-    return node.operator === SyntaxKind.PlusPlusToken ||
-      node.operator === SyntaxKind.MinusMinusToken
-      ? unwrapped(node.operand)
-      : undefined;
-  return isForInStatement(node) && isExpression(node.initializer)
-    ? unwrapped(node.initializer)
-    : undefined;
-}
-
-/**
- * The names a binding's declared type allows: those of its literal union, and `undefined` as well
- * for an optional parameter with no default, which holds it where the argument is left out.
- */
-function declaredKeys(binding: FrameBinding): readonly string[] | undefined {
-  const names = literalTypeKeys(binding.type);
-  const optional =
-    isParameterDeclaration(binding) &&
-    binding.questionToken !== undefined &&
-    binding.initializer === undefined;
-  return names !== undefined && optional ? [...names, 'undefined'] : names;
-}
-
-/** A written literal key or union, without inferring arbitrary string values from their uses. */
-function literalTypeKeys(type: TypeNode | undefined): readonly string[] | undefined {
-  if (type === undefined) return undefined;
-  const names = new Set<string>();
-  const pending = [type];
-  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    if (isParenthesizedTypeNode(each)) {
-      pending.push(each.type);
-    } else if (isUnionTypeNode(each)) {
-      pending.push(...each.types);
-    } else if (isLiteralTypeNode(each) && isExpression(each.literal)) {
-      const value = constantValue(each.literal);
-      if (value === undefined) return undefined;
-      names.add(String(value));
-    } else {
-      return undefined;
-    }
-  }
-  return [...names];
-}
-
-/** A lexical constant's initializer or the literal entries its for-of loop takes it from. */
-function constantKeys(binding: FrameBinding): readonly Expression[] | undefined {
-  if (!isVariableDeclaration(binding) || !isVariableDeclarationList(binding.parent))
-    return undefined;
-  if (!/^const\s/u.test(binding.parent.getText(binding.getSourceFile()))) return undefined;
-  if (binding.initializer !== undefined) return [binding.initializer];
-  const loop = binding.parent.parent;
-  if (!isForOfStatement(loop)) return undefined;
-  const entries = unwrapped(loop.expression);
-  return isArrayLiteralExpression(entries) ? entries.elements : undefined;
 }
 
 /** The receiver's known ancestor keys remain readable when only the final binding key is unknown. */
