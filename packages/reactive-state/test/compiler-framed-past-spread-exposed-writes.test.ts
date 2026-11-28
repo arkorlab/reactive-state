@@ -93,10 +93,62 @@ const CASES: readonly Case[] = [
     source: `function frames(error:Error,at:number){${BOX}const sources:object[]=[{other:1},{other:2}];sources[at]={inner:error};Object.assign(box,...sources);${READ}}`,
     refused: true,
   },
-  // A limit: an entry pushed to the array is no write the compile follows.
+  // What an array method stores in the array is written into it as well.
   {
-    id: 'past-unread-spread-entry-pushed-limit',
+    id: 'past-unread-spread-entry-pushed',
     source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1}];sources.push({inner:error});Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'exposed-spread-entry-pushed',
+    source: `function frames(error:Error){${BOX}const sources:object[]=[{other:1}];sources.push({inner:error});Object.assign(box,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-unshifted',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1}];sources.unshift({inner:error});Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-spliced-in',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1},{other:2}];sources.splice(1,0,{inner:error});Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entries-filled',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1},{other:2}];sources.fill({inner:error});Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-pushed-in-a-loop',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1}];let n=0;do{Object.assign(box,...unread,...sources);}while((sources.push({inner:error}),n++<1));${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-pushed-data',
+    source: `function frames(error:Error,...unread:object[]){void error;${BOX}const sources:object[]=[{other:1}];sources.push({inner:{stack:'fixed'}});Object.assign(box,...unread,...sources);${READ}}`,
+    refused: false,
+  },
+  {
+    id: 'past-unread-spread-entry-spliced-out-data',
+    source: `function frames(error:Error,...unread:object[]){void error;${BOX}const sources:object[]=[{other:1},{other:2}];sources.splice(1,1);Object.assign(box,...unread,...sources);return box.inner?.stack;}`,
+    refused: false,
+  },
+  {
+    id: 'past-unread-spread-other-array-pushed-data',
+    source: `function frames(error:Error,...unread:object[]){void error;${BOX}const sources:object[]=[{other:1}];const other:object[]=[];other.push({inner:error});Object.assign(box,...unread,...sources);return box.inner?.stack;}`,
+    refused: false,
+  },
+  // Limits: what a spread of a list the compile cannot read pushes, and what a destructuring
+  // assignment writes into an entry, are no write the compile follows.
+  {
+    id: 'past-unread-spread-entries-pushed-from-a-list-limit',
+    source: `function frames(error:Error,more:object[],...unread:object[]){${BOX}const sources:object[]=[{other:1}];sources.push(...more);Object.assign(box,...unread,...sources);${READ}}`,
+    refused: false,
+  },
+  {
+    id: 'past-unread-spread-entry-written-by-a-pattern-limit',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1},{other:2}];[sources[1]]=[{inner:error}];Object.assign(box,...unread,...sources);${READ}}`,
     refused: false,
   },
 ];

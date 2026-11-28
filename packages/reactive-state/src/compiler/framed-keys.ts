@@ -7,12 +7,14 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
+  isCallExpression,
   isComputedPropertyName,
   isElementAccessExpression,
   isIdentifier,
   isObjectBindingPattern,
   isOmittedExpression,
   isParameterDeclaration,
+  isPropertyAccessExpression,
   isSourceFile,
   isSpreadElement,
   isVariableDeclaration,
@@ -405,6 +407,13 @@ function tupleTargetWrites(
       tupleEntry(node.left, aliases, entries)
     )
       values.push(node.right);
+    if (
+      entries === 'any' &&
+      isCallExpression(node) &&
+      (node.end <= spread.pos || tupleWriteBefore(node, call, aliases, owner)) &&
+      framedPossibleBranch(node)
+    )
+      values.push(...storedEntries(node, aliases));
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -434,6 +443,33 @@ function tupleWriteBefore(
   for (const binding of aliases)
     if (repeatedFrameRead(node, call, binding, owner) || repeatsAround(owner, binding)) return true;
   return false;
+}
+
+/** The arguments of the array methods that store a value in it, by the range of each that is stored. */
+const STORING: ReadonlyMap<string, readonly [number, number]> = new Map([
+  ['fill', [0, 1]],
+  ['push', [0, Infinity]],
+  ['splice', [2, Infinity]],
+  ['unshift', [0, Infinity]],
+]);
+
+/**
+ * What a call of `push`, `unshift`, `splice` or `fill` on the same lexical tuple or resolved constant
+ * alias stores in it: each argument it names, no spread of a list the compile cannot read.
+ */
+function storedEntries(
+  call: CallExpression,
+  aliases: ReadonlySet<FrameBinding>,
+): readonly Expression[] {
+  const member = unwrapped(call.expression);
+  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
+  const name = frameMemberName(member);
+  const range = name === undefined ? undefined : STORING.get(name);
+  const holder = unwrapped(member.expression);
+  const selected = isIdentifier(holder) ? frameBindingOf(holder) : undefined;
+  if (range === undefined || selected?.keys.length !== 0 || !aliases.has(selected.binding))
+    return [];
+  return call.arguments.slice(range[0], range[1]).filter((each) => !isSpreadElement(each));
 }
 
 /** The last canonical index of an array: a larger number, or any other name, is no entry's. */
