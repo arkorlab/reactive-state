@@ -34,23 +34,51 @@ export function changesContext(sql: string, conforming: boolean): boolean {
 const SESSION_COMMANDS = new Set(['discard', 'reset', 'set']);
 
 /**
- * Whether SQL changes the settings of the session it runs on: of a pool, one connection of many,
- * which the others and the store would not share. A Unicode-escaped identifier may spell `set_config`
- * as `changesContext` says. A text the lexer cannot read is let run, as this guards a statement
- * outside a render, which the application wrote to run.
+ * Whether the `SET` at `at` sets what holds for the transaction alone and no plan reads: its
+ * constraints' deferral (`SET CONSTRAINTS ALL DEFERRED`), not a setting of that prefix
+ * (`SET constraints.name = 1`).
  */
-export function changesSession(sql: string, conforming: boolean): boolean {
-  const tokens = sqlTokens(sql, conforming);
-  if (tokens === undefined) return false;
+function setsConstraints(tokens: readonly string[], at: number): boolean {
+  return tokens[at] === 'set' && tokens[at + 1] === 'constraints' && tokens[at + 2] !== '.';
+}
+
+/**
+ * The tokens of `sql` as each string syntax the session may have reads them: of one known on
+ * (`conforming`), that alone; of one not known, both, as a backslash in a string is a letter of it
+ * in the one and may end it in the other. None where the text cannot be read in any of them.
+ */
+function readingsOf(sql: string, conforming: boolean): readonly (readonly string[])[] | undefined {
+  const readings = (conforming ? [true] : [true, false])
+    .map((each) => sqlTokens(sql, each))
+    .filter((tokens) => tokens !== undefined);
+  return readings.length === 0 ? undefined : readings;
+}
+
+/** Whether `tokens` change a setting of the session (`changesSession`). */
+function changesIn(tokens: readonly string[]): boolean {
   return tokens.some((token, at) => {
     return (
       token === '`' ||
       ((at === 0 || tokens[at - 1] === ';') &&
         SESSION_COMMANDS.has(token) &&
-        !setsTransaction(tokens, at)) ||
+        !setsTransaction(tokens, at) &&
+        !setsConstraints(tokens, at)) ||
       (identifierOf(token) === 'set_config' && tokens[at + 1] === '(')
     );
   });
+}
+
+/**
+ * Whether SQL changes the settings of the session it runs on: of a pool, one connection of many,
+ * which the others and the store would not share. A Unicode-escaped identifier may spell `set_config`
+ * as `changesContext` says. Read by each string syntax the session may have, a change either finds
+ * counts; a text that cannot be read in any may change one, and is refused with it: what is let run
+ * on a pool's connection may be given to the next to take it, which the text cannot say it leaves
+ * as it was. A checked-out connection runs such a text and is closed as it is given back.
+ */
+export function changesSession(sql: string, conforming: boolean): boolean {
+  const readings = readingsOf(sql, conforming);
+  return readings === undefined || readings.some((tokens) => changesIn(tokens));
 }
 
 /** Whether the `SET` at `at` sets for the transaction alone (`SET LOCAL x = 1`). */
@@ -72,18 +100,6 @@ function setsForTransaction(tokens: readonly string[], open: number): boolean {
   return false;
 }
 
-/**
- * The tokens of `sql` as each string syntax the session may have reads them: of one known on
- * (`conforming`), that alone; of one not known, both, as a backslash in a string is a letter of it
- * in the one and may end it in the other. None where the text cannot be read in any of them.
- */
-function readingsOf(sql: string, conforming: boolean): readonly (readonly string[])[] | undefined {
-  const readings = (conforming ? [true] : [true, false])
-    .map((each) => sqlTokens(sql, each))
-    .filter((tokens) => tokens !== undefined);
-  return readings.length === 0 ? undefined : readings;
-}
-
 /** Whether `tokens` change a setting beyond the transaction (`leavesSession`). */
 function leavesIn(tokens: readonly string[]): boolean {
   return tokens.some((token, at) => {
@@ -92,6 +108,7 @@ function leavesIn(tokens: readonly string[]): boolean {
       ((at === 0 || tokens[at - 1] === ';') &&
         SESSION_COMMANDS.has(token) &&
         !setsTransaction(tokens, at) &&
+        !setsConstraints(tokens, at) &&
         !setsLocal(tokens, at)) ||
       (identifierOf(token) === 'set_config' &&
         tokens[at + 1] === '(' &&
@@ -128,36 +145,80 @@ function endsTransactionAt(tokens: readonly string[], at: number): boolean {
   return after !== 'prepared' && (after !== 'to' || tokens[at] !== 'rollback');
 }
 
-/** Whether the settings a transaction holds for itself are held after `tokens`, as `before` them. */
-function scopedOver(tokens: readonly string[], before: boolean): boolean {
-  let held = before;
+/**
+ * Whether the settings a transaction holds for itself (`SET LOCAL`, `set_config(…, true)`) are held
+ * after `tokens`, as `before` them: `sent`, while they go and where they stop short — one set stays,
+ * and the end of the transaction is not told, for a statement that fails before it never ran it —
+ * and `ran`, once every statement did, in the order the text has them.
+ */
+function scopedOver(tokens: readonly string[], before: boolean): Scoped {
+  let ran = before;
+  let sent = before;
   for (const [at, token] of tokens.entries()) {
     const opens = at === 0 || tokens[at - 1] === ';';
-    if (opens && endsTransactionAt(tokens, at)) held = false;
-    else if (
+    if (opens && endsTransactionAt(tokens, at)) {
+      ran = false;
+    } else if (
       (opens && token === 'set' && tokens[at + 1] === 'local') ||
       (identifierOf(token) === 'set_config' &&
         tokens[at + 1] === '(' &&
         setsForTransaction(tokens, at + 1))
     ) {
-      held = true;
+      ran = true;
+      sent = true;
     }
   }
-  return held;
+  return { ran, sent };
+}
+
+/** What a text does of the settings a transaction holds for itself (`scopedAfter`). */
+export interface Scoped {
+  /** Whether they are held while the text goes, or after a statement of it fails. */
+  readonly sent: boolean;
+  /** Whether they are held once every statement of it ran. */
+  readonly ran: boolean;
 }
 
 /**
- * Whether the settings a transaction holds for itself (`SET LOCAL`, `set_config(…, true)`) are held
- * after `sql`, a text of a connection's, where they `before` it were: set by a statement of it, let
+ * What `sql`, a text of a connection's, does of the settings a transaction holds for itself
+ * (`SET LOCAL`, `set_config(…, true)`) where they `before` it were: set by a statement of it, let
  * go of where a statement of it ends the transaction, whichever way it is written (`COMMIT;`,
- * `END`, `COMMIT AND CHAIN`), in the order the text has them. Read by each string syntax the
- * session may have, they are held where either reading holds them; of a text that cannot be read
- * in any, they may be, as a render through the connection is refused only while its transaction
- * is open.
+ * `END`, `COMMIT AND CHAIN`), in the order the text has them. Let go of only where the text ran to
+ * its end (`ran`): while it goes, or where it fails part-way, the transaction may be as it was
+ * (`sent`), and holds what it held. Read by each string syntax the session may have, they are held
+ * where either reading holds them; of a text that cannot be read in any, they may be, as a render
+ * through the connection is refused only while its transaction is open.
  */
-export function scopedAfter(sql: string, conforming: boolean, before: boolean): boolean {
+export function scopedAfter(sql: string, conforming: boolean, before: boolean): Scoped {
   const readings = readingsOf(sql, conforming);
-  return readings === undefined || readings.some((tokens) => scopedOver(tokens, before));
+  if (readings === undefined) return { ran: true, sent: true };
+  const each = readings.map((tokens) => scopedOver(tokens, before));
+  return { ran: each.some((one) => one.ran), sent: each.some((one) => one.sent) };
+}
+
+/**
+ * Whether `tokens`, a text's, leave a transaction open: one opened (`BEGIN`, `START TRANSACTION`)
+ * that no later statement of it ends.
+ */
+function opensIn(tokens: readonly string[]): boolean {
+  let open = false;
+  for (const [at, token] of tokens.entries()) {
+    if (at !== 0 && tokens[at - 1] !== ';') continue;
+    if (token === 'begin' || (token === 'start' && tokens[at + 1] === 'transaction')) open = true;
+    else if (endsTransactionAt(tokens, at)) open = false;
+  }
+  return open;
+}
+
+/**
+ * Whether SQL leaves a transaction open on the connection it runs on: of a pool, one that is given
+ * to the next to take it, who would write into a transaction no one commits. A text that opens one
+ * and ends it (`BEGIN; …; COMMIT`) leaves none. Read by each string syntax the session may have; a
+ * text that cannot be read in any is for `changesSession` to refuse.
+ */
+export function leavesTransactionOpen(sql: string, conforming: boolean): boolean {
+  const readings = readingsOf(sql, conforming);
+  return readings?.some((tokens) => opensIn(tokens)) === true;
 }
 
 /** A temporary table's row type, which ordinary staging-table DDL intentionally does not follow. */
