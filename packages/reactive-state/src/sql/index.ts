@@ -83,7 +83,11 @@ type FollowedTables<S> = Readonly<Record<`${typeof SCHEMA_TABLE}${string}`, Tabl
 export interface FollowDrizzleOptions {
   /** The store the tables are read through, as the authority's host gives it: `sql` unless given. */
   readonly store?: string;
-  /** The schema the change log is kept in, of PostgreSQL alone: `reactive_state` unless given. */
+  /**
+   * The schema the change log is kept in, of PostgreSQL alone: `reactive_state` unless given — none
+   * PostgreSQL keeps for itself (`pg_…`, `information_schema`), nor the application's own
+   * (`public`, a followed table's schema).
+   */
   readonly namespace?: string;
 }
 
@@ -159,6 +163,8 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
 ): DrizzleFollow<S> {
   const storeName = options.store ?? 'sql';
   const namespace = options.namespace ?? DEFAULT_NAMESPACE;
+  // Of a namespace it refuses, nothing is made: no generation of it is kept.
+  const channel = channelOf(namespace);
   const byRelation = new Map<string, string>();
   const keysByTable = new Map<string, readonly KeyColumn[]>();
   const relations: FollowedRelation[] = [];
@@ -172,13 +178,6 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
       name: config.name,
       schema: config.schema ?? 'public',
     };
-    // A plan names no relation of the log's own schema (`planReads`), so a render that read such a
-    // table would note nothing but the schema's change.
-    if (relation.schema === namespace) {
-      throw new TypeError(
-        `followDrizzle(): \`${name}\` is a table of \`${namespace}\`, the schema the change log is kept in: keep the application's tables out of it.`,
-      );
-    }
     // The keys' values of each changed row, as the log keeps them: what a render's conditions name.
     tables[name] = table(Object.fromEntries(keys.map((key) => [key.field, text()])), {
       external: storeName,
@@ -186,6 +185,14 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
     byRelation.set(relationKey(relation), name);
     keysByTable.set(name, keys);
     relations.push(relation);
+  }
+  // The schema's count takes the objects of the log's schema for the log's own: a followed table's
+  // schema is the application's.
+  const held = relations.find((relation) => relation.schema === namespace);
+  if (held !== undefined) {
+    throw new TypeError(
+      `followDrizzle(): \`${namespace}\` is not a namespace: the followed table \`${relationKey(held)}\` is in it, and it is the application's own.`,
+    );
   }
   const schemaTable = schemaTableOf(storeName);
   if (Object.hasOwn(tables, schemaTable)) {
@@ -204,7 +211,7 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
   };
   return Object.freeze({
     captureSql: () => changeCaptureSql(relations, namespace),
-    channel: channelOf(namespace),
+    channel,
     client: <C extends Connection>(client: C) => trackedClient(client, followed),
     prune: (client: Queryable, before: number) => pruneSqlChanges(client, before, namespace),
     store: (client: Queryable) => sqlStore(client, followed),

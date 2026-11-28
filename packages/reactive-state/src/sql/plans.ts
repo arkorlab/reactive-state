@@ -92,10 +92,10 @@ function scanOf(node: PlanNode, relation: Relation): Scan {
 
 /**
  * The relations the plan in `answer` — the rows `EXPLAIN (VERBOSE, FORMAT JSON)` answered — reads,
- * but PostgreSQL's catalogs and `namespace`, the log's own, and whether any node of it writes or
- * locks rows.
+ * but PostgreSQL's catalogs, and whether any node of it writes or locks rows. A relation of the
+ * log's schema is as any other: one nothing follows, which a render reads not.
  */
-export function planReads(answer: unknown, namespace: string): PlanReads {
+export function planReads(answer: unknown): PlanReads {
   const found = new Map<string, Relation>();
   const scans: Scan[] = [];
   let writes = false;
@@ -104,7 +104,7 @@ export function planReads(answer: unknown, namespace: string): PlanReads {
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     writes ||= node['Node Type'] === 'ModifyTable';
     locks ||= node['Node Type'] === 'LockRows';
-    const relation = relationOf(node, namespace);
+    const relation = relationOf(node);
     if (relation !== undefined) {
       found.set(relationKey(relation), relation);
       scans.push(scanOf(node, relation));
@@ -114,14 +114,14 @@ export function planReads(answer: unknown, namespace: string): PlanReads {
   return { locks, relations: [...found.values()], scans, writes };
 }
 
-/** The table a node of a plan scans, but a catalog or the log itself; none for a node of no scan. */
-function relationOf(node: PlanNode, namespace: string): Relation | undefined {
+/** The table a node of a plan scans, but a catalog's; none for a node of no scan. */
+function relationOf(node: PlanNode): Relation | undefined {
   const name = node['Relation Name'];
   const schema = node['Schema'];
   if (typeof name !== 'string' || typeof schema !== 'string') {
     return undefined;
   }
-  return schema === namespace || CATALOGS.has(schema) ? undefined : { name, schema };
+  return CATALOGS.has(schema) ? undefined : { name, schema };
 }
 
 /** The nodes a node of a plan holds below it. */

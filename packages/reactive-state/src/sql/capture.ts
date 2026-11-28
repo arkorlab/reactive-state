@@ -66,18 +66,28 @@ const SCHEMA_KEPT = [
   'SECURITY LABEL',
 ] as const;
 
-/** The functions of the log's own, which `captureSql()` makes anew in its schema. */
+/** The log's own tables in its schema, by name: of each, a relation and a row type. */
+const LOG_TABLES = ['changes', 'ddl', 'head'] as const;
+
+/** The indexes of the log's own tables' primary keys, by name. */
+const LOG_INDEXES = ['changes_pkey', 'head_pkey'] as const;
+
+/**
+ * The functions of the log's own, which `captureSql()` makes anew in its schema, by their
+ * signatures as PostgreSQL writes a function's identity: an application's function of one of
+ * their names but other arguments is none of them.
+ */
 const LOG_FUNCTIONS = [
-  'capture_all',
-  'capture_deleted',
-  'capture_inserted',
-  'capture_updated',
-  'ddl_count',
-  'fold_ddl',
-  'image_sql',
-  'note',
-  'note_ddl',
-  'note_drop',
+  'capture_all()',
+  'capture_deleted()',
+  'capture_inserted()',
+  'capture_updated()',
+  'ddl_count()',
+  'fold_ddl(double precision)',
+  'image_sql(pg_catalog.oid,pg_catalog.text[])',
+  'note(pg_catalog.text,pg_catalog.text)',
+  'note_ddl()',
+  'note_drop()',
 ] as const;
 
 /** How many keys one `jsonb_build_object` of a row's image takes: PostgreSQL's 100 arguments. */
@@ -108,6 +118,29 @@ const IDENTIFIER_BYTES = 63;
  * channel in `LISTEN` — PGlite's `listen` too — which folds a name of capitals to lower case.
  */
 const NAMESPACE = /^[a-z_][a-z0-9_]*$/u;
+
+/**
+ * A schema PostgreSQL keeps for itself: each name of `pg_` — its catalog, its TOAST tables, a
+ * session's temporary schema (`pg_temp`, `pg_temp_3`, `pg_toast_temp_3`) — which a server makes for
+ * no one (`CREATE SCHEMA` refuses the prefix), and the standard's `information_schema`. A log there
+ * is no application's: a session's goes with it, other sessions see none of it, and the schema's
+ * count reads none of their objects.
+ */
+const SYSTEM_SCHEMA = /^(?:pg_|information_schema$)/u;
+
+/**
+ * A session's temporary schema, as a statement's pattern: `pg_temp`, as a command's object says it
+ * of the session's own, or a name of the prefixes PostgreSQL reads as temporary (`pg_temp_3`,
+ * `pg_toast_temp_3`). A schema of another name of those letters (`pg_tempdata`, which PGlite's
+ * single user may make) is the application's.
+ */
+const TEMPORARY_SCHEMA = "'^pg_temp$|^pg_(toast_)?temp_'";
+
+/**
+ * The schema PostgreSQL makes for the application, where its objects are unless it says otherwise:
+ * no log's, as the schema's count takes the objects of the log's schema for the log's own.
+ */
+const DEFAULT_SCHEMA = 'public';
 
 /** `name` as a PostgreSQL identifier: quoted, its quotes doubled. */
 function quoted(name: string): string {
@@ -161,13 +194,24 @@ export function logOf(namespace: string): LogRelations {
 }
 
 /**
- * `namespace`, refused where it is no name PostgreSQL holds unquoted, or where a name of its
- * triggers would be cut short, as two of them would alike.
+ * `namespace`, refused where it is no name PostgreSQL holds unquoted, a schema PostgreSQL keeps for
+ * itself or makes for the application, or where a name of its triggers would be cut short, as two
+ * of them would alike.
  */
 function checkedNamespace(namespace: string): string {
   if (!NAMESPACE.test(namespace)) {
     throw new TypeError(
       `\`${namespace}\` is not a namespace: a name PostgreSQL holds unquoted, of lower-case letters, digits and \`_\`.`,
+    );
+  }
+  if (SYSTEM_SCHEMA.test(namespace)) {
+    throw new TypeError(
+      `\`${namespace}\` is not a namespace: a name of \`pg_\` is PostgreSQL's own, whose prefix \`CREATE SCHEMA\` refuses, and so is \`information_schema\`.`,
+    );
+  }
+  if (namespace === DEFAULT_SCHEMA) {
+    throw new TypeError(
+      `\`${namespace}\` is not a namespace: it is the application's own default schema, whose objects the log's count would take for the log's.`,
     );
   }
   quoted(`${namespace}_truncate`);
@@ -325,9 +369,14 @@ function ddlCounterOf(namespace: string): readonly string[] {
     return `DO $$ BEGIN IF ${owned} THEN BEGIN CREATE EVENT TRIGGER ${trigger} ON ${event} EXECUTE FUNCTION ${schema}.${quoted(run)}(); EXCEPTION WHEN duplicate_object THEN NULL; END; ALTER EVENT TRIGGER ${trigger} ENABLE ALWAYS; END IF; EXCEPTION WHEN insufficient_privilege OR feature_not_supported THEN NULL; END $$`;
   };
   // As the role that made it, of no search path the caller set: a role of no right to the log
-  // changes the schema as it may, and is counted; nothing of the count fails a command.
+  // changes the schema as it may, and is counted; no fault of the count's fails a command. A lock
+  // the count may not have does, as any lock would: past the session's `lock_timeout`, which bounds
+  // how long a command holds its own, or in a deadlock; and so does a cancel (`statement_timeout`),
+  // which `OTHERS` catches not. A command that went on would go uncounted, and one that fails
+  // leaves nothing to count, but what a command of several transactions committed before it
+  // (`DETACH PARTITION … CONCURRENTLY`, which the digest tells of, and `FINALIZE` ends).
   const counted = (name: string, body: string): string =>
-    `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS event_trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN ${body} EXCEPTION WHEN OTHERS THEN NULL; END $$`;
+    `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS event_trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN ${body} EXCEPTION WHEN lock_not_available OR deadlock_detected THEN RAISE; WHEN OTHERS THEN NULL; END $$`;
   const note = `INSERT INTO ${ddl} DEFAULT VALUES;`;
   const application = `(an.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', ${own}) AND an.nspname !~ '^pg_(toast_)?temp_')`;
   // A relation or a type of the application's of the name `name`, which a temporary one of it
@@ -349,30 +398,45 @@ function ddlCounterOf(namespace: string): readonly string[] {
   const relation = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c JOIN pg_class AS t ON t.oid = c.objid AND c.classid = 'pg_class'::regclass WHERE t.relpersistence = 't' AND t.relkind IN (${TEMPORARY_KINDS}) AND (${flagged} OR t.relkind = 'v' OR ${shadowed('t.relname')} OR ${typeShadowed('t.relname')} OR EXISTS (SELECT 1 FROM pg_inherits AS i JOIN pg_class AS p ON p.oid = i.inhparent WHERE i.inhrelid = t.oid AND p.relpersistence <> 't')))`;
   const composite = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c JOIN pg_class AS t ON t.oid = c.objid AND c.classid = 'pg_class'::regclass WHERE t.relkind = 'c' AND t.relnamespace = pg_my_temp_schema())`;
   const named = NAMED_CLASSES.map((name) => `${literal(name)}::regclass`).join(', ');
-  const routine = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c WHERE c.schema_name ~ '^pg_(toast_)?temp' AND c.classid IN (${named}))`;
+  const routine = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c WHERE c.schema_name ~ ${TEMPORARY_SCHEMA} AND c.classid IN (${named}))`;
   // A temporary relation whose row type, or its array, an object a statement names is of — a domain
   // over it, a function's argument or result, a composite type's attribute — of a dependency of its
   // own, which no staging table of `LIKE … INCLUDING ALL` has but its array's; or of a relation that
   // inherits from it, whose columns a change of it changes.
-  const kin = `WITH RECURSIVE "kin" ("oid") AS (SELECT t.oid UNION SELECT i.inhrelid FROM pg_inherits AS i JOIN "kin" AS k ON i.inhparent = k.oid)`;
+  // A relation that never had children has no descendants. The catalog flag may stay true after
+  // its last child goes, which only leaves the walk in place; false safely skips its scans.
+  const kin = `WITH RECURSIVE "kin" ("oid") AS (SELECT t.oid UNION SELECT i.inhrelid FROM pg_inherits AS i JOIN "kin" AS k ON i.inhparent = k.oid WHERE t.relhassubclass)`;
   const dependedOn = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c JOIN pg_class AS t ON t.oid = c.objid AND c.classid = 'pg_class'::regclass WHERE t.relpersistence = 't' AND EXISTS (${kin} SELECT 1 FROM "kin" AS k JOIN pg_class AS r ON r.oid = k.oid JOIN pg_type AS y ON y.oid = r.reltype JOIN pg_depend AS p ON p.refclassid = 'pg_type'::regclass AND p.refobjid IN (y.oid, y.typarray) AND p.deptype = 'n'))`;
   // An object a statement names, or a relation one is of: counted, but no other relation's change
   // after it, which changes what no name of `pg_temp`'s means — the session's flag is a relation's
   // a statement may read in place of the application's alone.
   const namedTemporary = `(${composite} OR ${routine} OR ${dependedOn})`;
-  // Of the log's own schema, an object of the application's put in it — a view, a function — but
-  // none of the log's own, which `captureSql()` makes anew as each host starts.
-  const logs = LOG_FUNCTIONS.map((name) => literal(name)).join(', ');
-  const ownMade = `(c.object_type IN ('view', 'materialized view') OR (c.object_type IN ('function', 'procedure', 'aggregate') AND (SELECT p.proname FROM pg_proc AS p WHERE p.oid = c.objid) NOT IN (${logs})))`;
-  const ownDropped = `(d.object_type IN ('view', 'materialized view') OR (d.object_type IN ('function', 'procedure', 'aggregate') AND split_part(d.object_identity, '(', 1) NOT IN (SELECT ${own} || '.' || l.name FROM unnest(ARRAY[${logs}]) AS l(name))))`;
-  const commands = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c WHERE c.schema_name IS NULL OR (c.schema_name !~ '^pg_(toast_)?temp' AND (c.schema_name <> ${own} OR ${ownMade})))`;
+  // Of the log's own schema, each object of the application's put in it — a view, a table, a type,
+  // a function — but none of the log's own, which `captureSql()` makes anew as each host starts: its
+  // tables, their primary keys and row types, its functions, each by its kind and its identity. Nor
+  // the functions of another namespace's log, which its host makes anew as it starts: of a schema
+  // whose `note_ddl` an event trigger of the schema's name runs, as none but a superuser makes, and
+  // no application's tables of the log's names. All else of that schema is counted, and a log that
+  // made no event trigger is counted whole. An identity is read of no quotes, as a drop's is written
+  // as the session that dropped it quotes (`quote_all_identifiers`); a name that holds a quote of
+  // its own, which PostgreSQL writes doubled, is no log's.
+  const anotherLog = (row: 'c' | 'd'): string =>
+    `EXISTS (SELECT 1 FROM pg_event_trigger AS e JOIN pg_proc AS p ON p.oid = e.evtfoid JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = ${row}.schema_name AND p.proname = 'note_ddl' AND e.evtname = n.nspname || ${literal(DDL_TRIGGER)})`;
+  const of = (name: string): string => `${literal(name)}::pg_catalog.regclass`;
+  const theLog = (row: 'c' | 'd'): string => {
+    const ofKind = (kind: string, names: readonly string[]): string =>
+      `(${row}.classid = ${of(kind)} AND pg_catalog.replace(${row}.object_identity, '"', '') IN (SELECT ${row}.schema_name || '.' || o.name FROM unnest(ARRAY[${names.map((name) => literal(name)).join(', ')}]) AS o(name)))`;
+    const inOwn = `${row}.schema_name = ${own}`;
+    return `${row}.object_identity !~ '""' AND ((${inOwn} AND (${ofKind('pg_class', [...LOG_TABLES, ...LOG_INDEXES])} OR ${ofKind('pg_type', LOG_TABLES)})) OR (${ofKind('pg_proc', LOG_FUNCTIONS)} AND (${inOwn} OR ${anotherLog(row)})))`;
+  };
+  const commands = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c WHERE c.schema_name IS NULL OR (c.schema_name !~ ${TEMPORARY_SCHEMA} AND coalesce(NOT (${theLog('c')}), true)))`;
   // The dropped relations' own row types and their arrays, of the drop's objects read once: a
   // temporary table's drop drops no type a statement names — a domain over it, dropped of
   // `CASCADE`, is none of them. A type is looked up in them by a hash, not a scan of the drop.
   const relations = `r.object_type IN ('table', 'view', 'materialized view', 'sequence', 'foreign table')`;
   const ownRowTypes = `"own" ("identity") AS (SELECT r.object_identity FROM "dropped" AS r WHERE ${relations} UNION ALL SELECT r.object_identity || '[]' FROM "dropped" AS r WHERE ${relations})`;
   const ownRowType = `coalesce(d.object_identity IN (SELECT o."identity" FROM "own" AS o WHERE o."identity" IS NOT NULL), false)`;
-  const drops = `EXISTS (SELECT 1 FROM pg_event_trigger_dropped_objects() AS d WHERE d.schema_name IS NULL OR (NOT d.is_temporary AND d.schema_name !~ '^pg_(toast_)?temp' AND (d.schema_name <> ${own} OR ${ownDropped})))`;
+  const drops = `EXISTS (SELECT 1 FROM pg_event_trigger_dropped_objects() AS d WHERE d.schema_name IS NULL OR (NOT d.is_temporary AND d.schema_name !~ ${TEMPORARY_SCHEMA} AND coalesce(NOT (${theLog('d')}), true)))`;
   const temporaryDrops = `EXISTS (WITH "dropped" AS MATERIALIZED (SELECT * FROM pg_event_trigger_dropped_objects()), ${ownRowTypes} SELECT 1 FROM "dropped" AS d WHERE d.is_temporary AND ((d.object_type IN ('table', 'view', 'sequence', 'foreign table') AND (${flagged} OR ${shadowed('d.object_name')})) OR (d.object_type IN ('type', 'domain', 'composite type') AND (d.original OR ${flagged} OR ${typeShadowed('d.object_name')} OR NOT ${ownRowType})) OR d.object_type IN ('function', 'procedure', 'aggregate', 'operator', 'operator class', 'operator family', 'collation', 'conversion', 'text search configuration', 'text search dictionary', 'text search parser', 'text search template', 'composite type column')))`;
   return [
     `CREATE TABLE IF NOT EXISTS ${ddl} ("at" timestamptz NOT NULL DEFAULT clock_timestamp(), "n" bigint NOT NULL DEFAULT 1)`,
@@ -434,7 +498,7 @@ export function changeCaptureSql(
     `CREATE TABLE IF NOT EXISTS ${changes} ("seq" bigint PRIMARY KEY, "schema_name" text NOT NULL, "table_name" text NOT NULL, "at" timestamptz NOT NULL DEFAULT clock_timestamp())`,
     // A log made before entries kept rows: its entries of none name their tables alone. Altered
     // only where it lacks them, so that a start locks the log for no writer.
-    `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = ${literal(changes)}::regclass AND attname = 'image' AND NOT attisdropped) THEN ALTER TABLE ${changes} ADD COLUMN IF NOT EXISTS "side" text, ADD COLUMN IF NOT EXISTS "image" jsonb; END IF; END $$`,
+    `DO $$ BEGIN IF (SELECT count(*) FROM pg_attribute WHERE attrelid = ${literal(changes)}::regclass AND attname IN ('side', 'image') AND NOT attisdropped) < 2 THEN ALTER TABLE ${changes} ADD COLUMN IF NOT EXISTS "side" text, ADD COLUMN IF NOT EXISTS "image" jsonb; END IF; END $$`,
     // Of the role that made the log alone, of which the functions run: any other that may use the
     // log's schema could else append an entry that renders what read a table again, or attach a
     // trigger function to a table of its own.

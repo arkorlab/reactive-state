@@ -5,6 +5,7 @@ import {
   TAIL,
 } from '../authority/external.ts';
 import { logOf, relationKey } from './capture.ts';
+import { queryCapture } from './compat.ts';
 import { type Queryable, SchemaDigest } from './digest.ts';
 import { type Followed, type KeyColumn } from './keys.ts';
 
@@ -150,7 +151,14 @@ export function sqlStore(client: Queryable, followed: Followed): ExternalStore {
     changes: async (since, limit): Promise<ExternalChanges> => {
       const far = limit * TAIL.pagesAtOnce;
       const row = rowOf(
-        (await client.query(statement, [since, limit, far, far * FOLD.turns])).rows,
+        (
+          await queryCapture(
+            client,
+            statement,
+            [since, limit, far, far * FOLD.turns],
+            followed.namespace,
+          )
+        ).rows,
       );
       const epoch = row['epoch'];
       if (typeof epoch !== 'string') {
@@ -196,5 +204,10 @@ export async function pruneSqlChanges(
     `DELETE FROM ${changes} WHERE "seq" <= (SELECT max("seq") FROM ${changes} WHERE "at" < to_timestamp($1::double precision / 1000))`,
     [before],
   );
-  await client.query(`SELECT ${schema}."fold_ddl"($1::double precision)`, [before]);
+  await queryCapture(
+    client,
+    `SELECT ${schema}."fold_ddl"($1::double precision)`,
+    [before],
+    namespace,
+  );
 }

@@ -223,7 +223,7 @@ class Plans {
     }
     // A plan asked as the schema changed may say what it is no more: read whole, and kept not.
     const { answered, current } = planned;
-    const scans = this.#scansOfPlan(sql, planReads(answered.plan, this.#followed.namespace));
+    const scans = this.#scansOfPlan(sql, planReads(answered.plan));
     if (!current) {
       return { current, scans };
     }

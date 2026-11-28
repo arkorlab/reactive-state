@@ -37,6 +37,8 @@ export interface Catalog {
   readonly keys: ReadonlyMap<string, ReadonlySet<string>>;
   /** Of each followed table, the type PostgreSQL names each of those keys by (`status`, `text`). */
   readonly types: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Of each followed table, the namespace of each key's type, for a qualified enum constant. */
+  readonly typeSchemas?: ReadonlyMap<string, ReadonlyMap<string, string>>;
   /** Of each followed table, the oid of each of those keys' types, whose serializer sends a value. */
   readonly oids?: ReadonlyMap<string, ReadonlyMap<string, number>>;
   /**
@@ -92,7 +94,7 @@ export function catalogSql(followed: Followed): string {
   const nondeterministic =
     'EXISTS (SELECT 1 FROM pg_collation AS x WHERE NOT x.collisdeterministic)';
   const deterministic = `a.attcollation = 0 OR (coalesce(co.collisdeterministic, true) AND NOT ${nondeterministic})`;
-  const columns = `(SELECT coalesce(json_agg(json_build_object('name', a.attname, 'type', t.typname, 'category', t.typtype, 'oid', t.oid::bigint, 'builtin', t.typnamespace = 'pg_catalog'::regnamespace, 'deterministic', ${deterministic})), '[]'::json) FROM pg_attribute AS a JOIN pg_type AS t ON t.oid = a.atttypid LEFT JOIN pg_collation AS co ON co.oid = a.attcollation WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)`;
+  const columns = `(SELECT coalesce(json_agg(json_build_object('name', a.attname, 'type', t.typname, 'type_schema', tn.nspname, 'category', t.typtype, 'oid', t.oid::bigint, 'builtin', t.typnamespace = 'pg_catalog'::regnamespace, 'deterministic', ${deterministic})), '[]'::json) FROM pg_attribute AS a JOIN pg_type AS t ON t.oid = a.atttypid JOIN pg_namespace AS tn ON tn.oid = t.typnamespace LEFT JOIN pg_collation AS co ON co.oid = a.attcollation WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)`;
   // An `=` of the application's of a type a key may be — one PostgreSQL may resolve before
   // its own, as the search path orders them — compares otherwise than the key's text does.
   const operators = `EXISTS (SELECT 1 FROM pg_operator AS o JOIN pg_namespace AS n ON n.oid = o.oprnamespace JOIN pg_type AS l ON l.oid = o.oprleft JOIN pg_type AS r ON r.oid = o.oprright WHERE o.oprname = '=' AND n.nspname <> 'pg_catalog' AND (l.typtype IN ('e', 'p') OR r.typtype IN ('e', 'p') OR l.typname IN (${EQUALS_TYPES}) OR r.typname IN (${EQUALS_TYPES})))`;
@@ -188,8 +190,16 @@ function renamesIn(trees: unknown, bodies: unknown, conforming: boolean): boolea
 function keysOfTable(
   table: Readonly<Record<string, unknown>>,
   kinds: ReadonlyMap<string, KeyKind>,
-): { readonly oids: Map<string, number>; readonly types: Map<string, string> } {
-  const usable = { oids: new Map<string, number>(), types: new Map<string, string>() };
+): {
+  readonly oids: Map<string, number>;
+  readonly types: Map<string, string>;
+  readonly schemas: Map<string, string>;
+} {
+  const usable = {
+    oids: new Map<string, number>(),
+    schemas: new Map<string, string>(),
+    types: new Map<string, string>(),
+  };
   if (table['kind'] !== 'r' || table['partition'] !== false || table['hidden'] !== false) {
     return usable;
   }
@@ -200,6 +210,9 @@ function keysOfTable(
     const kind = typeof name === 'string' ? kinds.get(name) : undefined;
     if (kind !== undefined && column['deterministic'] === true && fits(kind, column)) {
       usable.types.set(name as string, String(column['type']));
+      if (typeof column['type_schema'] === 'string') {
+        usable.schemas.set(name as string, column['type_schema']);
+      }
       if (typeof column['oid'] === 'number') usable.oids.set(name as string, column['oid']);
     }
   }
@@ -251,6 +264,7 @@ export function catalogOf(rows: unknown, followed: Followed): Catalog {
   }
   const keys = new Map<string, ReadonlySet<string>>();
   const types = new Map<string, ReadonlyMap<string, string>>();
+  const typeSchemas = new Map<string, ReadonlyMap<string, string>>();
   const oids = new Map<string, ReadonlyMap<string, number>>();
   const hidden = new Set<string>();
   const tables = listOf(row['tables']);
@@ -270,8 +284,9 @@ export function catalogOf(rows: unknown, followed: Followed): Catalog {
     const usable = keysOfTable(table, kinds);
     keys.set(declared, new Set(usable.types.keys()));
     types.set(declared, usable.types);
+    typeSchemas.set(declared, usable.schemas);
     oids.set(declared, usable.oids);
     if (table['hidden'] !== false) hidden.add(declared);
   }
-  return { conforming, hidden, inherited, keys, oids, partitioned, types };
+  return { conforming, hidden, inherited, keys, oids, partitioned, types, typeSchemas };
 }

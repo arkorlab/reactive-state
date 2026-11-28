@@ -238,6 +238,46 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     });
   });
 
+  it.each(['side', 'image'])(
+    'explains how to upgrade a log missing its %s column',
+    async (column) => {
+      const setup = await opened();
+      const store = setup.follow.store(setup.pg);
+      const before = await store.changes(0, 10);
+      await setup.pg.query(`ALTER TABLE reactive_state.changes DROP COLUMN "${column}"`);
+
+      await expect(store.changes(0, 10)).rejects.toThrow('follow.captureSql()');
+
+      for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+
+      await expect(store.changes(0, 10)).resolves.toMatchObject({ head: before.head });
+    },
+  );
+
+  it('explains how to upgrade a log missing its schema-count function', async () => {
+    const setup = await opened();
+    const store = setup.follow.store(setup.pg);
+    const before = await store.changes(0, 10);
+    await setup.pg.query('DROP FUNCTION reactive_state.ddl_count()');
+
+    await expect(store.changes(0, 10)).rejects.toThrow('follow.captureSql()');
+
+    for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+
+    await expect(store.changes(0, 10)).resolves.toMatchObject({ head: before.head });
+  });
+
+  it('explains how to upgrade a log missing its schema-fold function', async () => {
+    const setup = await opened();
+    await setup.pg.query('DROP FUNCTION reactive_state.fold_ddl(double precision)');
+
+    await expect(setup.follow.prune(setup.pg, Date.now())).rejects.toThrow('follow.captureSql()');
+
+    for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+
+    await expect(setup.follow.prune(setup.pg, Date.now())).resolves.toBeUndefined();
+  });
+
   it.each([
     {
       what: 'a write',
@@ -699,15 +739,40 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
   });
 
   it.each([
+    'pg_temp',
+    'pg_temp_3',
+    'pg_temp_log',
+    'pg_toast_temp_1',
+    'pg_temporary',
+    'pg_tempdata',
+    'pg_toast_tempx',
+    'pg_log',
+    'pg_',
+    'pg_catalog',
+    'pg_toast',
+    'information_schema',
+  ])('refuses a namespace of a schema PostgreSQL keeps for itself: %s', (namespace) => {
+    expect(() => followDrizzle(schema, { namespace })).toThrow("PostgreSQL's own");
+  });
+
+  it.each([
+    ['public', { archived }],
+    ['public', schema],
+    ['archive', schema],
+  ])("refuses a namespace of the application's own schema: %s", (namespace, tables) => {
+    expect(() => followDrizzle(tables, { namespace })).toThrow("the application's own");
+  });
+
+  it.each([
     ['the default', undefined, 'reactive_state'],
     ['one that is given', { namespace: 'ledger' }, 'ledger'],
   ] as const)(
-    'refuses a table of the schema the log is kept in, which no plan names: %s namespace',
+    "refuses a table of the schema the log is kept in, whose objects are taken for the log's: %s namespace",
     (_name, options, kept) => {
       const inLog = pgSchema(kept).table('entries', { id: text().primaryKey() });
 
       expect(() => followDrizzle({ entries: inLog }, options)).toThrow(
-        `\`entries\` is a table of \`${kept}\`, the schema the change log is kept in`,
+        `\`${kept}\` is not a namespace: the followed table \`${kept}.entries\` is in it`,
       );
     },
   );
@@ -718,6 +783,26 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     expect(() => followDrizzle({ entries: inDefault }, { namespace: 'ledger' })).not.toThrow();
     expect(() => followDrizzle(schema)).not.toThrow();
   });
+
+  it('keeps no generation of a namespace it refuses', () => {
+    const generations = Symbol.for('arkorlab.reactive-state.drizzle-generations');
+    const shared = globalThis as unknown as Record<
+      symbol,
+      ReadonlyMap<string, unknown> | undefined
+    >;
+
+    expect(() => followDrizzle(schema, { namespace: 'pg_kept' })).toThrow('is not a namespace');
+    expect(() => followDrizzle(schema, { namespace: 'archive' })).toThrow('is not a namespace');
+    expect(shared[generations]?.has('pg_kept')).not.toBe(true);
+    expect(shared[generations]?.has('archive')).not.toBe(true);
+  });
+
+  it.each(['pg', 'pglog', 'log_pg_', 'information_schema_log', '_pg_temp'])(
+    'takes a namespace that only resembles a schema of PostgreSQL: %s',
+    (namespace) => {
+      expect(followDrizzle(schema, { namespace }).channel).toBe(`${namespace}_changes`);
+    },
+  );
 
   it('runs what an operation started that settles after it, as it would have', async () => {
     const setup = await opened();

@@ -51,6 +51,30 @@ describe("a scan's conditions", () => {
       [{ bare: false, cast: false, column: 'id', operands: [{ constant: '5' }] }],
     ],
     [
+      'a constant of a qualified type',
+      "(tasks.status = 'open'::app.status)",
+      [
+        {
+          bare: false,
+          cast: false,
+          column: 'status',
+          operands: [{ constant: 'open', schema: 'app', type: 'status' }],
+        },
+      ],
+    ],
+    [
+      'a constant of a quoted qualified type',
+      `(tasks.status = 'open'::"odd.schema"."Status""Name")`,
+      [
+        {
+          bare: false,
+          cast: false,
+          column: 'status',
+          operands: [{ constant: 'open', schema: 'odd.schema', type: 'Status"Name' }],
+        },
+      ],
+    ],
+    [
       'a boolean column alone',
       'tasks.done',
       [{ bare: true, cast: false, column: 'done', operands: [{ constant: 'true' }] }],
@@ -64,6 +88,21 @@ describe("a scan's conditions", () => {
       'a list of parameters',
       '(tasks.project_id = ANY (ARRAY[$1, $2]))',
       [equal('project_id', 1, 2)],
+    ],
+    [
+      'a list of qualified enum constants',
+      "(tasks.status = ANY (ARRAY['open'::app.status, 'closed'::app.status]))",
+      [
+        {
+          bare: false,
+          cast: false,
+          column: 'status',
+          operands: [
+            { constant: 'open', schema: 'app', type: 'status' },
+            { constant: 'closed', schema: 'app', type: 'status' },
+          ],
+        },
+      ],
     ],
     ['a quoted column', '(tasks."projectId" = $1)', [equal('projectId', 1)]],
   ])('takes %s', (_what, expression, expected) => {
@@ -83,6 +122,7 @@ describe("a scan's conditions", () => {
     ["a subquery's value", '(tasks.project_id = (InitPlan 1).col1)'],
     ['a collation', '(tasks.project_id = $1 COLLATE "C")'],
     ['a constant of a collation', `(tasks.project_id = 'p1'::text COLLATE "und-x-icu")`],
+    ['a qualified constant of a collation', `(tasks.project_id = 'p1'::app.status COLLATE "C")`],
     // As PostgreSQL writes `a\b` with `standard_conforming_strings` off.
     ['a constant of a backslash', String.raw`(tasks.title = 'a\\b'::text)`],
     ['a function', '(lower(tasks.title) = $1)'],
