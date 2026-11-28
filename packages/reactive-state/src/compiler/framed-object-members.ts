@@ -67,6 +67,29 @@ export function framedObjectSources(
   node: Expression,
   keys: readonly string[],
 ): readonly AssignedFrameSource[] | undefined {
+  return walkedSources(node, keys, undefined);
+}
+
+/**
+ * The sources of `framedObjectSources`, and beside them each result of an assign with sources the
+ * compile cannot read that the walk meets inside the object (`framedUnreadAssign`), as written, with
+ * the type it is asserted to: what such a result holds is what its type says, which a reader that asks
+ * the type its value is written as keeps. The object itself is the reader's own to keep.
+ */
+export function framedTypedObjectSources(
+  node: Expression,
+  keys: readonly string[],
+): readonly AssignedFrameSource[] | undefined {
+  const typed: AssignedFrameSource[] = [];
+  const sources = walkedSources(node, keys, typed);
+  return sources === undefined ? undefined : [...sources, ...typed];
+}
+
+function walkedSources(
+  node: Expression,
+  keys: readonly string[],
+  typed: AssignedFrameSource[] | undefined,
+): readonly AssignedFrameSource[] | undefined {
   const root = literalReceiver(node, keys);
   if (root === undefined) return undefined;
   const pending: AssignedFrameSource[] = [root];
@@ -78,6 +101,7 @@ export function framedObjectSources(
     const paths = read.get(value) ?? new Set<string>();
     if (paths.has(path)) continue;
     read.set(value, paths.add(path));
+    if (typed !== undefined && at !== root && framedUnreadAssign(value)) typed.push(at);
     const key = at.keys[0];
     if (key === undefined) {
       found.push(at);

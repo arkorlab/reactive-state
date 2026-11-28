@@ -314,6 +314,43 @@ const TYPED: readonly Case[] = [
       "async function frames(...sources:{body:Error}[]){return await new Request('http://example.test/',Object.assign({},...sources)as{method:string;body:Error}).text();}",
     refused: true,
   },
+  // The walk through an object that holds the result as a source meets it, as written.
+  {
+    id: 'cause-object-spread-of-assert-spread-result',
+    source:
+      "function frames(...sources:{cause:Error}[]){return (new Error('x',{...(Object.assign({},...sources)as{cause:Error})}).cause as{stack?:string}).stack;}",
+    refused: true,
+  },
+  {
+    id: 'cause-assign-of-assert-spread-result',
+    source:
+      "function frames(...sources:{cause:Error}[]){return (new Error('x',Object.assign({},Object.assign({},...sources)as{cause:Error})).cause as{stack?:string}).stack;}",
+    refused: true,
+  },
+  {
+    id: 'cause-assign-of-assert-spread-result-both-asserted',
+    source:
+      "function frames(...sources:{cause:Error}[]){return (new Error('x',Object.assign({},Object.assign({},...sources)as{cause:Error})as{cause:Error}).cause as{stack?:string}).stack;}",
+    refused: true,
+  },
+  {
+    id: 'request-body-object-spread-of-assert-spread-result',
+    source:
+      "async function frames(...sources:{body:Error}[]){return await new Request('http://example.test/',{...(Object.assign({},...sources)as{method:string;body:Error})}).text();}",
+    refused: true,
+  },
+  {
+    id: 'cause-object-spread-of-spread-result-unasserted-data',
+    source:
+      "function frames(error:Error,...sources:object[]){void error;return (new Error('x',{...Object.assign({},...sources)}).cause as{stack?:string}).stack;}",
+    refused: false,
+  },
+  {
+    id: 'cause-object-spread-of-assert-spread-result-data-type',
+    source:
+      "function frames(error:Error,...sources:{cause:{stack:string}}[]){void error;return (new Error('x',{...(Object.assign({},...sources)as{cause:{stack:string}})}).cause as{stack?:string}).stack;}",
+    refused: false,
+  },
   {
     id: 'cause-literal-past-spread',
     source:

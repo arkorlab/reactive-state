@@ -13,7 +13,7 @@ import { frameMemberName } from './framed-bindings.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedLiteralObject } from './framed-literal-data.ts';
 import { framedNativeArguments } from './framed-native-arguments.ts';
-import { framedObjectSources, framedUnreadAssign } from './framed-object-members.ts';
+import { framedTypedObjectSources, framedUnreadAssign } from './framed-object-members.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 
 const AGGREGATE = new Set(['AggregateError']);
@@ -70,7 +70,7 @@ function causeSources(
   if (options === undefined) return undefined;
   const optionPath = ['cause', ...path.slice(1)];
   const typed = { value: options, keys: optionPath };
-  const sources = framedObjectSources(options, optionPath);
+  const sources = framedTypedObjectSources(options, optionPath);
   if (sources === undefined) return [typed];
   return framedUnreadAssign(options) ? [...sources, typed] : sources;
 }
