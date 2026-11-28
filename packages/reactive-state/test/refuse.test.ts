@@ -5,9 +5,9 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { Engine } from '../src/authority/node-engine.ts';
 import { PROTOCOL_VERSION } from '../src/program.ts';
+import { FRAMEWORK_CODES, isApplicationCode } from '../src/refusal-codes.ts';
 import { operationDigest, operationRefusal } from '../src/runtime/outcome.ts';
 import { refuse } from '../src/server/index.ts';
-import { FRAMEWORK_CODES } from '../src/server/refuse.ts';
 import { application, BUILD } from './support/program.ts';
 
 /**
@@ -168,6 +168,35 @@ describe('an application’s own refusal of a server operation', () => {
     const codes = await answeredCodes();
 
     expect([...FRAMEWORK_CODES].filter((code) => !codes.has(code))).toStrictEqual([]);
+  });
+
+  it('reads no code the package answers a refusal with as the application’s own, as a page reads one', async () => {
+    const codes = await answeredCodes();
+
+    expect([...codes].filter((code) => isApplicationCode(code))).toStrictEqual([]);
+  });
+
+  it.each([
+    'ALREADY_MEMBER',
+    'NOT_IN_TEAM',
+    'A',
+    'FORBIDDEN',
+    'UNAUTHENTICATED',
+    'BUILD_MISMATCH',
+    'OPERATION_REJECTED',
+    'AUTHORITY_ERROR',
+    'lower',
+    'FORBIDDEN;team',
+    '',
+  ])('reads %j as the application’s own where refuse takes it alone', (code) => {
+    let taken = false;
+    try {
+      refuse(code);
+    } catch (error) {
+      taken = !(error instanceof TypeError);
+    }
+
+    expect(isApplicationCode(code)).toBe(taken);
   });
 
   it('refuses a render with the code, as the authority’s other refusals do', async () => {

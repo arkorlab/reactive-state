@@ -1,8 +1,10 @@
 /**
  * Follows a root's event stream (`EventSource`): each `frame` event says the revision of a newer
- * render of the root that shows something else, and `revoked` that the session ended, after which
- * the stream ends. The stream says no more than that: the page renders the root again itself,
- * through the router, so a tree is never shown with values of another revision than its own.
+ * render of the root that shows something else, and `revoked` that the stream will say no more —
+ * the session ended, the page's build is not the authority's, the application refused the root's
+ * render with a code of its own — after which the stream ends, and the follower stops. The stream
+ * says no more than that: the page renders the root again itself, through the router, so a tree is
+ * never shown with values of another revision than its own.
  *
  * A stream that fails is opened again by the follower rather than the browser, after a wait that
  * doubles with each failure in a row — with the newest subscription the root has, which carries

@@ -9,7 +9,8 @@ import { compileApp, writeOutputs } from './index.ts';
  *
  *   node src/compiler/cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>]
  *     [--session <specifier>#<export>] [--session-change <specifier>#<export>]
- *     [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--no-share] [--check]
+ *     [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--prefetch-cache <private|remote>]
+ *     [--no-share] [--check]
  *
  * compiles every component under `<srcDir>` first, in memory, with the custom hooks, the
  * `'use server'` modules and the shared modules it reaches, and reports each refusal; only when it
@@ -18,12 +19,13 @@ import { compileApp, writeOutputs } from './index.ts';
  * `--session` names how the application reads its own signed-in session, where it signs its users in
  * itself; `--session-change`, how it applies the change of that session a server operation asks for
  * (`changeSession`); `--prefetch`, the private cache the roots a request alone renders are rendered inside, for
- * a link's prefetch to carry them; `--no-share`, that nothing is shared — no route's view — and
- * every root renders for its own session.
+ * a link's prefetch to carry them; `--prefetch-cache remote`, that the deployment's cache keeps them
+ * too, by the reader's session; `--no-share`, that nothing is shared — no route's view — and every
+ * root renders for its own session.
  */
 
 const USAGE =
-  'usage: cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>] [--session <specifier>#<export>] [--session-change <specifier>#<export>] [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--no-share] [--check]';
+  'usage: cli.ts <srcDir> --out <dir> --app <appDir> [--database <specifier>#<export>] [--session <specifier>#<export>] [--session-change <specifier>#<export>] [--prefetch <profile>|<stale>/<revalidate>/<expire>] [--prefetch-cache <private|remote>] [--no-share] [--check]';
 const EXIT_FAILED = 1;
 const EXIT_USAGE = 2;
 
@@ -45,6 +47,7 @@ interface Run {
   readonly session: string | undefined;
   readonly sessionChange: string | undefined;
   readonly prefetch: string | undefined;
+  readonly prefetchCache: string | undefined;
   /** Whether anything may be shared: not where `--no-share` is given. */
   readonly share: boolean;
   readonly check: boolean;
@@ -66,6 +69,7 @@ function argumentsOf(argv: readonly string[]): Parsed {
         out: { type: 'string' },
         'no-share': { type: 'boolean' },
         prefetch: { type: 'string' },
+        'prefetch-cache': { type: 'string' },
         session: { type: 'string' },
         'session-change': { type: 'string' },
       },
@@ -76,6 +80,7 @@ function argumentsOf(argv: readonly string[]): Parsed {
   const { app, check, database, out, prefetch, session } = parsed.values;
   const share = parsed.values['no-share'] !== true;
   const sessionChange = parsed.values['session-change'];
+  const prefetchCache = parsed.values['prefetch-cache'];
   const [srcDir, ...more] = parsed.positionals;
   if (out === undefined || app === undefined || srcDir === undefined || more.length > 0) {
     return { usage: USAGE };
@@ -87,6 +92,7 @@ function argumentsOf(argv: readonly string[]): Parsed {
       database,
       out,
       prefetch,
+      prefetchCache,
       session,
       sessionChange,
       share,

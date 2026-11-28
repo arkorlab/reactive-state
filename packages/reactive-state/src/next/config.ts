@@ -54,6 +54,13 @@ export interface ReactiveStateOptions {
    */
   readonly prefetch?: string;
   /**
+   * Where the roots a prefetch carries are kept: `'private'`, by the browser alone, unless said; or
+   * `'remote'`, by the deployment's cache too — keyed by the reader's session, for a reload, a new
+   * tab or a prefetch to be answered without the authority — of an application that names its
+   * `prefetch` and its own `session`. A root of a persistent state, or of a route, stays private.
+   */
+  readonly prefetchCache?: 'private' | 'remote';
+  /**
    * `false` turns sharing off: the compile shares no route's view, and every root renders for its
    * own session. Unless said, it shares what it shows renders alike for every visitor.
    */
@@ -69,6 +76,7 @@ export interface LoaderOptions {
   readonly session?: string;
   readonly sessionChange?: string;
   readonly prefetch?: string;
+  readonly prefetchCache?: string;
   /** `off` where the application turned sharing off (`share: false`). */
   readonly share?: 'off';
   readonly [key: string]: string;
@@ -97,7 +105,7 @@ export const INSTANT_LOADER = fileURLToPath(new URL('loader-instant.cjs', import
 
 /** The loader's options for `options`, the application's root resolved. */
 export function loaderOptions(options: ReactiveStateOptions = {}): LoaderOptions {
-  const { database, prefetch, session, sessionChange } = options;
+  const { database, prefetch, prefetchCache, session, sessionChange } = options;
   return {
     out: options.out ?? '.reactive',
     root: path.resolve(options.root ?? process.cwd()),
@@ -106,6 +114,7 @@ export function loaderOptions(options: ReactiveStateOptions = {}): LoaderOptions
     ...(session !== undefined && { session }),
     ...(sessionChange !== undefined && { sessionChange }),
     ...(prefetch !== undefined && { prefetch }),
+    ...(prefetchCache !== undefined && { prefetchCache }),
     ...(options.share === false && { share: 'off' as const }),
   };
 }
@@ -136,14 +145,15 @@ function isLoaderOptions(value: unknown): value is LoaderOptions {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
-  const { database, out, prefetch, root, session, sessionChange, share, src } = value as Partial<
+  const { database, out, root, share, src } = value as Partial<Record<string, unknown>>;
+  const { prefetch, prefetchCache, session, sessionChange } = value as Partial<
     Record<string, unknown>
   >;
   return (
     typeof out === 'string' &&
     typeof root === 'string' &&
     typeof src === 'string' &&
-    [database, prefetch, session, sessionChange].every(
+    [database, prefetch, prefetchCache, session, sessionChange].every(
       (each) => each === undefined || typeof each === 'string',
     ) &&
     (share === undefined || share === 'off')
@@ -183,7 +193,8 @@ export function loaderOptionsOf(collection: RuleCollection): LoaderOptions | und
 
 /** What the compile is given of `loader`, the options of this package's rule. */
 export function projectOfLoader(loader: LoaderOptions): ProjectOptions {
-  const { database, out, prefetch, root, session, sessionChange, share, src } = loader;
+  const { database, out, root, share, src } = loader;
+  const { prefetch, prefetchCache, session, sessionChange } = loader;
   return {
     out,
     projectDir: root,
@@ -192,6 +203,7 @@ export function projectOfLoader(loader: LoaderOptions): ProjectOptions {
     ...(session !== undefined && { session }),
     ...(sessionChange !== undefined && { sessionChange }),
     ...(prefetch !== undefined && { prefetch }),
+    ...(prefetchCache !== undefined && { prefetchCache }),
     ...(share === 'off' && { share: false }),
   };
 }

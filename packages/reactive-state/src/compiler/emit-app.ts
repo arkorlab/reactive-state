@@ -11,6 +11,7 @@ import {
   prefetchParts,
   REQUEST_SESSION,
 } from './emit-host.ts';
+import { EXPIRE_FUNCTION, KEPT_IMPORTS, keptBody } from './emit-kept.ts';
 import { operationCallableType } from './emit-operation-types.ts';
 import { registryExports, registryImports, routingManifest } from './emit-routes.ts';
 import type { SiteInput } from './frames.ts';
@@ -96,67 +97,103 @@ function exportName(name: string): string {
 }
 
 /**
+ * The type of the props a page renders a component's root with, of a component of a parameter: the
+ * type literal its parameter writes without the props it types as nodes, or the type its parameter
+ * names without those TypeScript types as nodes, nor those the compile read as nodes (`RootProps`).
+ */
+function rootPropsType(component: Component, named: boolean): string {
+  const annotation =
+    component.propsType?.getText(component.sourceFile) ?? 'Readonly<Record<string, unknown>>';
+  const nodes = component.props.filter((prop) => prop.node).map((prop) => literal(prop.name));
+  if (named) {
+    const read = nodes.length === 0 ? '' : `, ${nodes.join(' | ')}`;
+    return `RootProps<${annotation}${read}>`;
+  }
+  return nodes.length === 0 ? annotation : `Omit<${annotation}, ${nodes.join(' | ')}>`;
+}
+
+/** What a root's entry imports of this package's `./next`. */
+function rootImports(named: boolean, kept: boolean): string {
+  const imported = [
+    ...(kept ? ['keptRootTag', 'keptSessionOf', 'keptUserTag'] : []),
+    'renderRoot',
+    ...(kept ? ['requestSession'] : []),
+    ...(named ? ['type RootProps'] : []),
+  ];
+  return `import { ${imported.join(', ')} } from '${NEXT}';`;
+}
+
+/** What a root's entry is told of the caches it is kept in. */
+interface RootCaches {
+  /** The route the root is registered by, whose guards are run wherever it renders. */
+  readonly route?: string | undefined;
+  /** The private cache the root renders inside, for a link's prefetch to carry it, where it does. */
+  readonly prefetch?: PrefetchLife | undefined;
+  /**
+   * Of a build whose roots the deployment's cache keeps (`--prefetch-cache remote`), whether it
+   * keeps this one (`rootRemote`): either way, the root hands its page the build's `expire`.
+   */
+  readonly remote?: { readonly kept: boolean } | undefined;
+}
+
+/**
  * A component's root entry (`<id>.root.tsx`): what a page renders it as, through the authority. A
  * page renders a root with its JSON props alone: the props that hold nodes are none of its own —
  * those its parameter's type literal types as nodes, or, where its parameter names the type of its
- * props, which the compile does not read, those TypeScript types as nodes (`RootProps`).
+ * props, which the compile does not read, those TypeScript types as nodes (`RootProps`). A root
+ * the deployment's cache keeps renders inside a function of its entry's own (`emit-kept.ts`).
  */
 export function emitRoot(
   compiled: CompiledComponent,
   file: string,
   outDir: string,
-  {
-    prefetch,
-    route,
-  }: {
-    /** The route the root is registered by, whose guards are run wherever it renders. */
-    readonly route?: string | undefined;
-    /** The private cache the root renders inside, for a link's prefetch to carry it, where it does. */
-    readonly prefetch?: PrefetchLife | undefined;
-  } = {},
+  { prefetch, remote, route }: RootCaches = {},
 ): string {
   const { component } = compiled;
-  const { parameter, propsType, sourceFile } = component;
-  const types = typeNames(propsType);
+  const types = typeNames(component.propsType);
   const lines = component.modules.flatMap((module) => {
     const typed = module.bindings.filter((binding) => types.has(binding.name.text));
     return typed.map((binding) => ({ binding, from: module.written, typeOnly: true }));
   });
-  let signature = '()';
-  let props = 'props: {}';
-  const named = propsType !== undefined && !isTypeLiteralNode(propsType);
-  if (parameter !== undefined) {
-    const annotation = propsType?.getText(sourceFile) ?? 'Readonly<Record<string, unknown>>';
-    const nodes = component.props.filter((prop) => prop.node).map((prop) => literal(prop.name));
-    if (named) {
-      const read = nodes.length === 0 ? '' : `, ${nodes.join(' | ')}`;
-      signature = `(props: RootProps<${annotation}${read}>)`;
-    } else {
-      signature =
-        nodes.length === 0
-          ? `(props: ${annotation})`
-          : `(props: Omit<${annotation}, ${nodes.join(' | ')}>)`;
-    }
-    props = 'props';
-  }
+  const named = component.propsType !== undefined && !isTypeLiteralNode(component.propsType);
+  const typed = component.parameter === undefined ? undefined : rootPropsType(component, named);
+  const life = remote?.kept === true ? prefetch : undefined;
   const elements = relativeSpecifier(file, path.join(outDir, 'elements'));
   const serverFunctions = relativeSpecifier(file, path.join(outDir, 'server-functions'));
-  // The route a root is registered by, whose guards are run wherever it renders.
-  const routed = route === undefined ? '' : `route: ${literal(route)}, `;
-  const cached = prefetchParts(prefetch);
-  return [
+  const expiring = remote === undefined ? '' : 'expire, ';
+  const cached = prefetchParts(life === undefined ? prefetch : undefined);
+  const head = [
     header(`${component.id}.reactive.tsx`),
-    ...cached.imports,
-    named
-      ? `import { renderRoot, type RootProps } from '${NEXT}';`
-      : `import { renderRoot } from '${NEXT}';`,
+    ...(life === undefined ? cached.imports : KEPT_IMPORTS),
+    rootImports(named, life !== undefined),
     ...importDeclarations(lines),
     `import { elements } from ${elements};`,
-    `import { update, view } from ${serverFunctions};`,
+    `import { ${expiring}update, view } from ${serverFunctions};`,
     '',
-    `export default async function ${component.name}${signature} {`,
+  ];
+  if (life !== undefined) {
+    const taken = (name: string): boolean => name === component.name || types.has(name);
+    const kept = unusedName('kept', taken);
+    const asks = unusedName('keptSession', (name) => taken(name) || name === kept);
+    const root = {
+      asks,
+      id: literal(component.id),
+      kept,
+      life,
+      name: component.name,
+      props: typed,
+    };
+    return [...head, ...keptBody(root)].join('\n');
+  }
+  const parameter = typed === undefined ? '' : `props: ${typed}`;
+  const props = typed === undefined ? 'props: {}' : 'props';
+  // The route a root is registered by, whose guards are run wherever it renders.
+  const routed = route === undefined ? '' : `route: ${literal(route)}, `;
+  return [
+    ...head,
+    `export default async function ${component.name}(${parameter}) {`,
     ...cached.body,
-    `  return renderRoot({ component: ${literal(component.id)}, elements, ${props}, ${routed}${cached.field}update, view });`,
+    `  return renderRoot({ component: ${literal(component.id)}, elements, ${props}, ${routed}${cached.field}${expiring}update, view });`,
     '}',
     '',
   ].join('\n');
@@ -253,14 +290,16 @@ export function emitElements(input: AppInput): string {
 
 /**
  * The Server Functions a page writes a field with, and has a root rendered again with for the
- * dynamic sites it shows (`server-functions.ts`).
+ * dynamic sites it shows (`server-functions.ts`) — and, of a build whose roots the deployment's cache
+ * keeps (`kept`), the one it expires its session's kept roots by (`expire`).
  */
-export function emitServerFunctions(sessions = false): string {
+export function emitServerFunctions(sessions = false, kept = false): string {
   return [
     header(APPLICATION, 'components'),
     "'use server';",
     '',
-    `import { updateField, viewRoot, type ViewAnswer } from '${NEXT}';`,
+    ...(kept ? ["import { refresh } from 'next/cache';", ''] : []),
+    `import { ${kept ? 'expireKeptRoots, ' : ''}updateField, viewRoot, type ViewAnswer } from '${NEXT}';`,
     "import type { FieldReceipt, Result } from '@arkorlab/reactive-state/program';",
     "import { elements } from './elements';",
     '',
@@ -274,6 +313,7 @@ export function emitServerFunctions(sessions = false): string {
     '  return viewRoot(input, elements);',
     '}',
     '',
+    ...(kept ? EXPIRE_FUNCTION : []),
   ].join('\n');
 }
 
@@ -282,6 +322,8 @@ export interface StubHost {
   readonly from: string;
   readonly session: boolean;
   readonly sessionChange: boolean;
+  /** Whether the build keeps its roots in the deployment's cache (`--prefetch-cache remote`). */
+  readonly kept: boolean;
 }
 
 /**
@@ -310,6 +352,7 @@ export function emitStub(operation: OperationModule, buildId: string, host?: Stu
           `build: ${literal(buildId)}`,
           ...(host.session ? [`session: ${session}`] : []),
           ...(host.sessionChange ? [`sessionChange: ${change}`] : []),
+          ...(host.kept ? ['kept: true'] : []),
         ].join(', ')} }`;
   const mirrored = [...(operation.callables?.values() ?? [])].flatMap(
     (callable) => callable.written ?? [],

@@ -401,6 +401,8 @@ function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
       app: path.relative(layout.projectDir, layout.appDir),
       database: options.database,
       host: [options.session, options.prefetch, options.share, options.sessionChange],
+      // Where said alone: a project that says nothing of it digests as it did before.
+      ...(options.prefetchCache !== undefined && { prefetchCache: options.prefetchCache }),
       out: path.relative(layout.projectDir, layout.outDir),
       proxy: proxy === undefined ? null : path.basename(proxy),
       src: path.relative(layout.projectDir, layout.srcDir),

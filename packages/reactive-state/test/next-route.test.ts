@@ -177,6 +177,18 @@ describe('the route a compile writes', () => {
       expect(unnamed.status).toBe(400);
     });
 
+    it('answers the application’s own refusal of the root as a stream that says `revoked` with its code, which the page reads it by', async () => {
+      hoisted.client['events']?.mockResolvedValue(
+        refusal(422, 'NOT_IN_TEAM', 'You are no longer a member of this team.'),
+      );
+
+      const refused = await get(request('events?subscription=s'), segments('events'));
+
+      await expect(refused.text()).resolves.toBe(
+        ': open\n\nevent: revoked\ndata: {"code":"NOT_IN_TEAM","error":"You are no longer a member of this team."}\n\n',
+      );
+    });
+
     it('answers a `HEAD` of the stream with the headers its `GET` opens one with and no body, opening none — as the route’s own `HEAD`, and as the `GET` Next.js answers a `HEAD` by', async () => {
       const { HEAD: head } = routeHandlers({ envelopes: {}, routes: [] });
       const asked = (): Request =>

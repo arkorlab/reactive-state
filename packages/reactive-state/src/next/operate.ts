@@ -12,6 +12,7 @@ import { type JsonBudget, jsonBudget, spendJson, toJson } from '../runtime/json.
 import { operationDigest } from '../runtime/outcome.ts';
 import { HTTP_INTERNAL_ERROR } from '../status.ts';
 import { authority, requestSession, type SessionSource } from './authority.ts';
+import { expireKeptRootsOf } from './kept.ts';
 
 /**
  * A server operation, as the `'use server'` stub a compile writes in place of the application's
@@ -23,7 +24,11 @@ import { authority, requestSession, type SessionSource } from './authority.ts';
  * operation. A call whose outcome is unknown — the authority could not be reached, did not answer
  * in time, or answered a fault of its own — is sent again under the same id, which the authority
  * runs once at most; one the authority refused is not, since it would refuse it again. Once the operation has run, the route
- * is rendered again in the same answer (`refresh`), so the page shows what it changed.
+ * is rendered again in the same answer (`refresh`), so the page shows what it changed. Of a build
+ * whose roots the deployment's cache keeps, an operation that ran first expires the session's kept
+ * roots at once (`revalidateTag` of a window of none), so that the render is the authority's, not
+ * the one kept from before the operation, while the browser keeps the pages it prefetched where the
+ * `refresh()` follows; a refusal and an unknown outcome expire nothing (`OperatedBy.kept`).
  */
 
 /** Sends again of a call whose outcome is unknown, after the first. */
@@ -141,7 +146,9 @@ function isResendable(failure: Failure): boolean {
  * (`changeSession` of `./server`), on its server: it is handed the change, which is JSON of 4 KiB
  * at most, once the operation has succeeded and before the route renders again — to set a cookie,
  * for one. The compile writes the application's into the stubs (`--session-change`). An error it
- * throws is the Server Action's: the operation ran all the same, and its page is not rendered again.
+ * throws is the Server Action's: the operation ran all the same, and its page is not rendered again
+ * — save of a build whose roots the deployment's cache keeps, where the expiry of the session's
+ * kept roots before it has the error's answer render the page.
  */
 export type SessionChange = (change: Json) => void | Promise<void>;
 
@@ -154,6 +161,18 @@ export interface OperatedBy {
   readonly session?: SessionSource | undefined;
   /** How the application applies the session change an operation asks for (`SessionChange`). */
   readonly sessionChange?: SessionChange | undefined;
+  /**
+   * Whether the build keeps its roots in the deployment's cache (`prefetchCache: 'remote'`): an
+   * operation that ran expires the session's at once (`revalidateTag` of a window of none), before
+   * the session change it asked for is applied and the route renders again. A refusal ran nothing,
+   * and an unknown outcome — the authority unreachable, out of time, or at fault — expires nothing
+   * either, though it may have committed: the expiry would have the error's answer render the
+   * route (`pathWasRevalidated`, `action-handler.js`) against the authority that just failed, each
+   * root refused and the page's state inside it lost, where a private build leaves the page as it
+   * was. Of one that did commit, a reload within the lifetime shows the render kept from before it
+   * until its stream sets it right.
+   */
+  readonly kept?: boolean | undefined;
 }
 
 /**
@@ -190,6 +209,26 @@ async function applied(
 }
 
 /**
+ * The error of a call to `module#name` the authority answered `failure` to: one of an outcome
+ * unknown — it may have run — or a refusal, which says it did not.
+ */
+function operationError(of: {
+  readonly module: string;
+  readonly name: string;
+  readonly failure: Failure;
+  readonly unknown: boolean;
+}): OperationError {
+  const { failure, module, name, unknown } = of;
+  const { code, message, status } = failure;
+  return new OperationError(
+    unknown
+      ? `Whether ${module}#${name} ran is unknown: ${message}`
+      : `${module}#${name} was refused (${String(status)} ${code}): ${message}`,
+    { cause: failure, code, outcome: unknown ? 'unknown' : 'refused', status },
+  );
+}
+
+/**
  * Runs `name` of the `'use server'` module `module` in the authority with `args`, and answers what
  * it returned. Throws an `OperationError` when it was refused, or when whether it ran is unknown.
  */
@@ -201,6 +240,7 @@ export async function operate(
 ): Promise<unknown> {
   const {
     build,
+    kept,
     session: source,
     sessionChange,
   } = typeof built === 'string' ? { build: built } : built;
@@ -225,14 +265,22 @@ export async function operate(
     result = await client.operate(session, call);
   }
   if (!result.ok) {
-    const { code, message, status } = result;
-    const unknown = unknownBefore || isUnknown(result);
-    throw new OperationError(
-      unknown
-        ? `Whether ${module}#${name} ran is unknown: ${message}`
-        : `${module}#${name} was refused (${String(status)} ${code}): ${message}`,
-      { cause: result, code, outcome: unknown ? 'unknown' : 'refused', status },
-    );
+    // Neither a refusal, which ran nothing, nor an unknown outcome expires a kept root: an expiry
+    // would have the error's answer render the route (`pathWasRevalidated`) against the authority
+    // that just failed. Of one that did commit, a reload within the lifetime shows the render kept
+    // from before it until its stream sets it right: inside the option's trade-off.
+    throw operationError({
+      failure: result,
+      module,
+      name,
+      unknown: unknownBefore || isUnknown(result),
+    });
+  }
+  // An operation that ran expires the session's kept roots before anything else can end the Server
+  // Action — the applier below, which may throw or redirect: Next.js applies what a Server Action
+  // expired whether it answers or throws.
+  if (kept === true) {
+    await expireKeptRootsOf(session);
   }
   await applied(module, name, result.value.sessionChange, sessionChange);
   try {
