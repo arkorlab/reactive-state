@@ -4,11 +4,11 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 import { changeCaptureSql } from '../src/sql/capture.ts';
 
 /**
- * The functions of the capture that only the role that made the log may execute are made, each, with
- * what `PUBLIC` is given of it taken away in one statement: no statement of the install leaves one
- * executable by a role that may use the log's schema, where each statement commits by itself. The
- * roles of these rows: `migrator`, which makes the table and the log and is no superuser, and
- * `reader`, which may use the log's schema.
+ * The functions of the capture that only the role that made the log may execute are made with what
+ * every other role is given of them taken away in one statement, the log's own, which is one
+ * transaction: no statement of the install leaves one executable by a role that may use the log's
+ * schema, and one that fails leaves nothing it made. The roles of these rows: `migrator`, which
+ * makes the table and the log and is no superuser, and `reader`, which may use the log's schema.
  */
 
 const RELATIONS = [{ keys: ['id'], name: 'items', schema: 'public' }];
@@ -20,8 +20,19 @@ const RESTRICTED: Readonly<Record<string, string>> = {
   capture_deleted: 'capture_deleted()',
   capture_inserted: 'capture_inserted()',
   capture_updated: 'capture_updated()',
+  hold: 'hold(text)',
+  image_sql: 'image_sql(oid, text[])',
   note: 'note(text, text)',
+  settle: 'settle()',
 };
+/** Those of them that run as the role that made the log, whoever's statement enters them. */
+const DEFINERS = [
+  'capture_all',
+  'capture_deleted',
+  'capture_inserted',
+  'capture_updated',
+  'settle',
+];
 
 /** A PGlite whose log's schema was made, and `reader` may use, before the install: it runs as `migrator`. */
 async function opened(): Promise<PGlite> {
@@ -42,7 +53,7 @@ async function opened(): Promise<PGlite> {
   return pg;
 }
 
-/** The functions of the log among `names` that exist, are definers' and `reader` may execute. */
+/** The functions of the log among the restricted that exist, are definers' and `reader` may execute. */
 async function executable(pg: PGlite, definers: boolean): Promise<readonly string[]> {
   const { rows } = await pg.query<{ name: string }>(
     `SELECT p.proname AS name FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
@@ -54,43 +65,27 @@ async function executable(pg: PGlite, definers: boolean): Promise<readonly strin
   return rows.map((row) => row.name);
 }
 
-/** The log as an installation made before the functions were definers left it: invoker's, public. */
+/** The log as an installation made before left its functions: executable by `PUBLIC`. */
 async function madeBefore(pg: PGlite): Promise<void> {
   for (const statement of changeCaptureSql(RELATIONS)) {
     await pg.query(statement);
   }
   for (const signature of Object.values(RESTRICTED)) {
-    await pg.exec(`
-      ALTER FUNCTION reactive_state.${signature} SECURITY INVOKER;
-      GRANT EXECUTE ON FUNCTION reactive_state.${signature} TO PUBLIC;
-    `);
+    await pg.exec(`GRANT EXECUTE ON FUNCTION reactive_state.${signature} TO PUBLIC`);
   }
 }
 
-/** Whether `statement` makes `note`, or takes `PUBLIC`'s execution from it. */
-function mentionsNote(statement: string): boolean {
-  return statement.includes('."note"(');
-}
-
-/** A PGlite whose install stopped after the statement that makes `note`, over functions made before or not. */
-async function installedUntilNote(over: boolean): Promise<PGlite> {
+/** A PGlite as `opened` makes it, over which such an installation was made. */
+async function openedOver(): Promise<PGlite> {
   const pg = await opened();
-  if (over) {
-    await madeBefore(pg);
-  }
-  for (const statement of changeCaptureSql(RELATIONS)) {
-    await pg.query(statement);
-    if (mentionsNote(statement)) {
-      break;
-    }
-  }
+  await madeBefore(pg);
   return pg;
 }
 
-/** How many entries the log holds. */
-async function entries(pg: PGlite): Promise<number> {
+/** How many functions the log's schema holds. */
+async function functions(pg: PGlite): Promise<number> {
   const { rows } = await pg.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM reactive_state.changes',
+    `SELECT count(*)::int AS n FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'reactive_state'`,
   );
   return rows[0]?.n ?? -1;
 }
@@ -128,10 +123,11 @@ describe('the statements that make the functions of the capture', () => {
   it(
     'leave none of them a definer’s that such a role may execute after any statement, of an install over functions made before',
     async () => {
-      const pg = await opened();
-      await madeBefore(pg);
-      const seen: (readonly string[])[] = [];
+      const pg = await openedOver();
 
+      await expect(executable(pg, true)).resolves.toStrictEqual(DEFINERS);
+
+      const seen: (readonly string[])[] = [];
       for (const statement of changeCaptureSql(RELATIONS)) {
         await pg.query(statement);
         seen.push(await executable(pg, true));
@@ -143,15 +139,33 @@ describe('the statements that make the functions of the capture', () => {
   );
 
   it.each([
-    ['a first install', false],
-    ['an install over functions made before', true],
+    ['a first install', opened],
+    ['an install over functions made before', openedOver],
   ])(
-    'refuse `note` to a role that may use the log’s schema where %s stops after the statement that makes it',
-    async (_what, over) => {
-      const pg = await installedUntilNote(over);
+    'refuse `note` to a role that may use the log’s schema once the statement of %s that makes it has run',
+    async (_what, make) => {
+      const pg = await make();
+      const [log = ''] = changeCaptureSql(RELATIONS);
+
+      await pg.query(log);
 
       await expect(callsNote(pg)).resolves.toBe('permission denied for function note');
-      await expect(entries(pg)).resolves.toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'make nothing where the statement of the log fails after it made them: no function is left for any role',
+    async () => {
+      const pg = await opened();
+      // The count of the schema's commands is made after the functions: of a view in its place, the
+      // statement fails there, as it alters what it takes for its table.
+      await pg.exec('CREATE VIEW reactive_state.ddl AS SELECT 1 AS "at"');
+      const [log = ''] = changeCaptureSql(RELATIONS);
+
+      await expect(pg.query(log)).rejects.toThrow('"ddl"');
+      await expect(functions(pg)).resolves.toBe(0);
+      await expect(executable(pg, false)).resolves.toStrictEqual([]);
     },
     TEST_TIMEOUT_MS,
   );
@@ -168,8 +182,7 @@ describe('the statements that make the functions of the capture', () => {
                has_function_privilege('reader', p.oid, 'EXECUTE') AS reader,
                has_function_privilege('migrator', p.oid, 'EXECUTE') AS installer
         FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'reactive_state' AND p.proname IN
-          ('capture_all', 'capture_deleted', 'capture_inserted', 'capture_updated', 'note', 'ddl_count', 'fold_ddl', 'image_sql')
+        WHERE n.nspname = 'reactive_state' AND p.prorettype <> 'event_trigger'::regtype
         ORDER BY p.proname
       `);
 
@@ -178,10 +191,15 @@ describe('the statements that make the functions of the capture', () => {
         ['capture_deleted', false, true],
         ['capture_inserted', false, true],
         ['capture_updated', false, true],
+        ['catch_up', true, true],
         ['ddl_count', true, true],
         ['fold_ddl', true, true],
-        ['image_sql', true, true],
+        ['hold', false, true],
+        ['image_sql', false, true],
+        ['next_number', true, true],
         ['note', false, true],
+        ['prune', true, true],
+        ['settle', false, true],
       ]);
     },
     TEST_TIMEOUT_MS,

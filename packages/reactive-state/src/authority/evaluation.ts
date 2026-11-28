@@ -202,6 +202,8 @@ export interface Scope {
   readonly onRead?: () => void;
   /** Told of what each statement of the application's own read, where anything counts them. */
   readonly onTableReads?: (reads: readonly TableRead[]) => void;
+  /** Whether the call renders for an event stream (`Evaluation.streamed`). */
+  readonly streamed?: boolean;
 }
 
 /** The fault of code that asked the database for what it may not ask for there. */
@@ -266,6 +268,7 @@ export function renderEvaluation(
         scope.onTableReads?.(read);
       });
     },
+    streamed: scope.streamed,
     transaction: () => Promise.reject(misuse(scope, 'db.transaction', why)),
     update: (table) => {
       throw misuse(scope, `db.${table}.update`, why);

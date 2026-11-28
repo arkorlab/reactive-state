@@ -563,6 +563,7 @@ export class AuthorityEngine {
       });
       const view = await viewOf(this.#core, session, claims.root, {
         bindings: false,
+        streamed: true,
         view: claims.view,
       });
       if (view.status === 'unauthenticated') {

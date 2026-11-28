@@ -87,8 +87,13 @@ export function scopeOf(core: Core, call: Call, session: Session | undefined): S
   };
 }
 
-/** A renderer for one call of the session's, or of a request of none. */
-export function rendererOf(core: Core, call: Call, session: Session | undefined): Renderer {
+/** A renderer for one call of the session's, or of a request of none, an event stream's if `streamed`. */
+export function rendererOf(
+  core: Core,
+  call: Call,
+  session: Session | undefined,
+  streamed = false,
+): Renderer {
   return {
     buildId: core.registry.buildId,
     counts: core.metrics,
@@ -97,7 +102,7 @@ export function rendererOf(core: Core, call: Call, session: Session | undefined)
     instances: 0,
     memo: core.memo,
     programs: core.registry.programs,
-    scope: scopeOf(core, call, session),
+    scope: { ...scopeOf(core, call, session), streamed },
     userId: session?.userId ?? '',
   };
 }
@@ -177,7 +182,7 @@ export function statusView(core: Core, status: RenderStatus, dependencies?: Depe
 /**
  * Renders the session's view of `root` — its sites for the view `requested`, or at first where it
  * names none — with bindings signed for its persistent states where `bindings` says so: a page's
- * render does; an event stream's, which only compares, does not.
+ * render does; an event stream's, which only compares, does not. `streamed` says it is a stream's.
  */
 export async function viewOf(
   core: Core,
@@ -186,6 +191,7 @@ export async function viewOf(
   options: {
     readonly admission?: string | undefined;
     readonly bindings: boolean;
+    readonly streamed?: boolean;
     readonly view?: PageView | undefined;
   },
 ): Promise<View> {
@@ -196,7 +202,7 @@ export async function viewOf(
   let shown: PageView = {};
   let named: PageView = {};
   try {
-    const renderer = rendererOf(core, call, session);
+    const renderer = rendererOf(core, call, session, options.streamed);
     const guarded = await guardedBy(
       core,
       renderer,

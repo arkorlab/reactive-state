@@ -21,7 +21,10 @@ const RESTRICTED: Readonly<Record<string, string>> = {
   capture_deleted: 'capture_deleted()',
   capture_inserted: 'capture_inserted()',
   capture_updated: 'capture_updated()',
+  hold: 'hold(text)',
+  image_sql: 'image_sql(oid, text[])',
   note: 'note(text, text)',
+  settle: 'settle()',
 };
 const NAMES = Object.keys(RESTRICTED);
 /** The ACL of a function only its owner may execute. */
@@ -47,7 +50,7 @@ async function opened(before: string): Promise<PGlite> {
   return pg;
 }
 
-/** Which of the five functions that exist `roles` may execute, by `role:function`. */
+/** Which of the restricted functions that exist `roles` may execute, by `role:function`. */
 async function executable(pg: PGlite, roles: readonly string[]): Promise<readonly string[]> {
   const { rows } = await pg.query<{ pair: string }>(
     `SELECT r.name || ':' || p.proname AS pair
@@ -61,21 +64,15 @@ async function executable(pg: PGlite, roles: readonly string[]): Promise<readonl
   return rows.map((row) => row.pair);
 }
 
-/** The install, run as it is, after each statement of which `check` is asked what is still open. */
+/** The install, run as it is, after each statement of which it is asked what `roles` may execute. */
 async function installing(
   pg: PGlite,
-  check: (made: ReadonlySet<string>) => Promise<readonly string[]>,
+  roles: readonly string[],
 ): Promise<readonly (readonly string[])[]> {
-  const made = new Set<string>();
   const seen: (readonly string[])[] = [];
   for (const statement of changeCaptureSql(RELATIONS)) {
     await pg.query(statement);
-    for (const name of NAMES) {
-      if (!made.has(name) && statement.includes(`."${name}"(`)) {
-        made.add(name);
-      }
-    }
-    seen.push(await check(made));
+    seen.push(await executable(pg, roles));
   }
   return seen;
 }
@@ -93,15 +90,23 @@ async function callsNote(pg: PGlite, role: string): Promise<string> {
   }
 }
 
-/** The functions executable by `roles` among those the install has made so far. */
-function openAmong(pg: PGlite, roles: readonly string[]) {
-  return async (made: ReadonlySet<string>): Promise<readonly string[]> => {
-    const open = await executable(pg, roles);
-    return open.filter((pair) => made.has(pair.slice(pair.indexOf(':') + 1)));
-  };
+/** What `role` is answered where it attaches the function of rows inserted to a table of its own. */
+async function attaches(pg: PGlite, role: string): Promise<string> {
+  await pg.exec(`RESET ROLE; SET ROLE ${role}`);
+  try {
+    await pg.exec(`
+      CREATE TABLE public.mine (id text PRIMARY KEY);
+      CREATE TRIGGER mine AFTER INSERT ON public.mine REFERENCING NEW TABLE AS rows_after FOR EACH STATEMENT EXECUTE FUNCTION reactive_state.capture_inserted('id');
+    `);
+    return 'ran';
+  } catch (error) {
+    return String((error as { message?: unknown }).message);
+  } finally {
+    await pg.exec('RESET ROLE; SET ROLE migrator');
+  }
 }
 
-/** Each of the five granted to `app` explicitly, after an install made them. */
+/** Each of the restricted granted to `app` explicitly, after an install made them. */
 const GRANTED_TO_APP = `
   GRANT EXECUTE ON FUNCTION ${Object.values(RESTRICTED)
     .map((signature) => `reactive_state.${signature}`)
@@ -113,10 +118,13 @@ function grantedOn(signature: string): string {
     GRANT EXECUTE ON FUNCTION reactive_state.${signature} TO mid WITH GRANT OPTION;
     SET ROLE mid; GRANT EXECUTE ON FUNCTION reactive_state.${signature} TO leaf; SET ROLE migrator;`;
 }
-/** Each of the five so granted. */
+/** Each of the restricted so granted. */
 const GRANTED_ON = Object.values(RESTRICTED)
   .map((signature) => grantedOn(signature))
   .join('');
+/** The installer's default privileges name `app` for the functions it makes. */
+const DEFAULT_TO_APP =
+  'ALTER DEFAULT PRIVILEGES FOR ROLE migrator GRANT EXECUTE ON FUNCTIONS TO app;';
 
 /** An install over one that was made and then granted `grants`, as `migrator`. */
 async function installedTwice(grants: string): Promise<PGlite> {
@@ -132,11 +140,9 @@ describe('the functions of the capture that only the role that made the log may 
   it(
     'are executable by no role the installer’s default privileges name for functions, after any statement of a first install',
     async () => {
-      const pg = await opened(
-        'ALTER DEFAULT PRIVILEGES FOR ROLE migrator GRANT EXECUTE ON FUNCTIONS TO app;',
-      );
+      const pg = await opened(DEFAULT_TO_APP);
 
-      const seen = await installing(pg, openAmong(pg, ['app']));
+      const seen = await installing(pg, ['app']);
 
       expect(seen.filter((open) => open.length > 0)).toStrictEqual([]);
     },
@@ -148,7 +154,9 @@ describe('the functions of the capture that only the role that made the log may 
     async () => {
       const pg = await installedTwice(GRANTED_TO_APP);
 
-      const seen = await installing(pg, openAmong(pg, ['app']));
+      await expect(executable(pg, ['app'])).resolves.toHaveLength(NAMES.length);
+
+      const seen = await installing(pg, ['app']);
 
       expect(seen.filter((open) => open.length > 0)).toStrictEqual([]);
     },
@@ -160,9 +168,9 @@ describe('the functions of the capture that only the role that made the log may 
     async () => {
       const pg = await installedTwice(GRANTED_ON);
 
-      await expect(executable(pg, ['mid', 'leaf'])).resolves.toHaveLength(10);
+      await expect(executable(pg, ['mid', 'leaf'])).resolves.toHaveLength(NAMES.length * 2);
 
-      const seen = await installing(pg, openAmong(pg, ['mid', 'leaf']));
+      const seen = await installing(pg, ['mid', 'leaf']);
 
       expect(seen.filter((open) => open.length > 0)).toStrictEqual([]);
     },
@@ -170,24 +178,20 @@ describe('the functions of the capture that only the role that made the log may 
   );
 
   it.each([
-    [
-      'default privileges name a role for functions',
-      async () =>
-        opened('ALTER DEFAULT PRIVILEGES FOR ROLE migrator GRANT EXECUTE ON FUNCTIONS TO app;'),
-    ],
-    ['a role was granted `note` since', async () => installedTwice(GRANTED_TO_APP)],
+    ['default privileges name a role for functions', async () => opened(DEFAULT_TO_APP)],
+    ['a role was granted them since', async () => installedTwice(GRANTED_TO_APP)],
   ])(
-    'refuse `note` to a role that may use the log’s schema where %s, once the statement that makes it has run',
+    'refuse `note`, and a trigger of its own table, to a role that may use the log’s schema where %s, once the statement that makes them has run',
     async (_what, make) => {
       const pg = await make();
-      for (const statement of changeCaptureSql(RELATIONS)) {
-        await pg.query(statement);
-        if (statement.includes('."note"(')) {
-          break;
-        }
-      }
+      const [log = ''] = changeCaptureSql(RELATIONS);
+
+      await pg.query(log);
 
       await expect(callsNote(pg, 'app')).resolves.toBe('permission denied for function note');
+      await expect(attaches(pg, 'app')).resolves.toBe(
+        'permission denied for function reactive_state.capture_inserted',
+      );
     },
     TEST_TIMEOUT_MS,
   );
@@ -211,7 +215,7 @@ describe('the functions of the capture that only the role that made the log may 
       expect(rows.map((row) => [row.name, row.acl])).toStrictEqual(
         owned.map((name) => [name, OWNER_ONLY]),
       );
-      await expect(executable(pg, ['member'])).resolves.toHaveLength(5);
+      await expect(executable(pg, ['member'])).resolves.toHaveLength(NAMES.length);
     },
     TEST_TIMEOUT_MS,
   );

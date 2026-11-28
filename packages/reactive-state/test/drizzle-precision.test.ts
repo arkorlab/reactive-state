@@ -1727,7 +1727,6 @@ describe(
         CREATE ROLE reader;
         GRANT USAGE ON SCHEMA reactive_state TO reader;
         GRANT SELECT ON reactive_state.changes, reactive_state.head TO reader;
-        GRANT DELETE ON reactive_state.changes TO reader;
         SET ROLE reader;
       `);
 
@@ -1767,7 +1766,6 @@ describe(
         CREATE ROLE reader;
         GRANT USAGE ON SCHEMA reactive_state TO reader;
         GRANT SELECT ON reactive_state.changes, reactive_state.head TO reader;
-        GRANT DELETE ON reactive_state.changes TO reader;
         SET ROLE reader;
       `);
 
@@ -1792,7 +1790,7 @@ describe(
     it("fails a read of the log's own tables, which nothing follows", async () => {
       const setup = await opened();
       const { render } = await engineOf(setup, async (_props, $) => {
-        const rows = await setup.orm.execute(sql`SELECT seq FROM reactive_state.head`);
+        const rows = await setup.orm.execute(sql`SELECT epoch FROM reactive_state.head`);
         return $.h('p', null, JSON.stringify(rows));
       });
 
@@ -2263,16 +2261,12 @@ describe(
       ).resolves.toBe(false);
     });
 
-    it("logs the writes of a role of main's rights where the database's default privileges keep functions from all", async () => {
+    it("logs the writes of a role of no right of the log, where the database's default privileges keep functions from all", async () => {
       const setup = await opened(
         'ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;',
       );
       await setup.pg.exec(`
         CREATE ROLE writer;
-        GRANT USAGE ON SCHEMA reactive_state TO writer;
-        GRANT INSERT ON reactive_state.changes TO writer;
-        GRANT SELECT, UPDATE ON reactive_state.head TO writer;
-        GRANT EXECUTE ON FUNCTION reactive_state.note(text, text) TO writer;
         GRANT SELECT, INSERT, DELETE ON projects TO writer;
         SET ROLE writer;
       `);
@@ -2372,7 +2366,6 @@ describe(
         `INSERT INTO reactive_state.changes ("seq", "schema_name", "table_name", "side", "image") VALUES ($1, 'public', 'tasks', 'after', '{"id": "9"}'::jsonb)`,
         [head + 1],
       );
-      await setup.pg.query('UPDATE reactive_state.head SET "seq" = $1', [head + 1]);
 
       const read = await store.changes(head, 10);
 
