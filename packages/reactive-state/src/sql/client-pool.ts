@@ -18,7 +18,13 @@ import {
   REFUSED,
   refusedCall,
 } from './client-plans.ts';
-import { endsTransaction, sentToPostgres, textOf, TransactionWrites } from './client-writes.ts';
+import {
+  answersRollback,
+  endsTransaction,
+  sentToPostgres,
+  textOf,
+  TransactionWrites,
+} from './client-writes.ts';
 import type { Followed } from './keys.ts';
 import { boundOf } from './serialized.ts';
 
@@ -259,7 +265,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       return Promise.reject(refused);
     }
     writes = undefined;
-    return held.through(run(), () => false);
+    return held.through(run(), () => false, answersRollback);
   };
   const queried = (first: unknown, ...rest: unknown[]): unknown => {
     const statement = statementOf(first, rest);
