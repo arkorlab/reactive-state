@@ -79,8 +79,22 @@ async function never(): Promise<void> {
   });
 }
 
-// A log D1 never answers the making of, as a D1 held behind a deploy's long migration would not.
-const hungDatabase = await rehosted(never);
+/**
+ * What the hung start's database does of the making of its log: never answers it (`hang`), as a D1
+ * held behind a deploy's long migration would not; refuses it (`fail`); or makes it. A test lets one
+ * be made, and counts the makings.
+ */
+export const hung: { mode: 'fail' | 'hang' | 'make'; made: number } = { made: 0, mode: 'hang' };
+
+const hungDatabase = await rehosted(async (host) => {
+  hung.made += 1;
+  if (hung.mode === 'hang') {
+    await never();
+  } else if (hung.mode === 'fail') {
+    throw new Error('The database refused the log.');
+  }
+  await host.open();
+});
 
 /** The application of one call, of a log that takes a while to make. */
 export const SlowStartAuthority = authorityObject({
