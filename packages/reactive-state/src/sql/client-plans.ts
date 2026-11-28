@@ -7,6 +7,7 @@ import {
   leavesSession,
   namesTemporaryRowType,
   scopedAfter,
+  type Scoped,
 } from './guards.ts';
 import type { Followed } from './keys.ts';
 import { explainSql, type PlanReads, planReads, type Scan } from './plans.ts';
@@ -300,8 +301,8 @@ export class Plans {
     return leavesSession(sql, this.#catalog?.conforming === true);
   }
 
-  /** Whether a checked-out connection holds a setting of its transaction's after `sql`, as `before` it. */
-  scopedAfter(sql: string, before: boolean): boolean {
+  /** What `sql`, a text of a checked-out connection's, does of the settings its transaction holds. */
+  scopedAfter(sql: string, before: boolean): Scoped {
     return scopedAfter(sql, this.#catalog?.conforming === true, before);
   }
 

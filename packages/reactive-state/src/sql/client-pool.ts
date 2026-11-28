@@ -32,7 +32,8 @@ import { boundOf } from './serialized.ts';
  * plans a statement through it. Nor does one through it while its open transaction holds a setting
  * of its own (`SET LOCAL`, `set_config(…, true)`): the plans of the pool were not asked under it,
  * and one asked under it would be read by every other connection. It is read again once the
- * transaction ends.
+ * transaction ends, which a statement lets go of where the server ran its end: a text that fails
+ * before it leaves the transaction as it was.
  *
  * A render may settle while a transaction it opened runs on. What opens and ends one reads nothing
  * and runs regardless, so Drizzle's `rollback` still ends it, and a connection given back in one is
@@ -134,21 +135,47 @@ function heard(): void {
   // Nothing more to tell.
 }
 
+/** What a promise nobody awaits is left to do of its failure: nothing, which the caller hears. */
+function ignored(): void {
+  // Nothing more to tell.
+}
+
 /** Why a render queries through no connection whose settings were changed: its plans were not asked under them. */
-function settingsRefused(): Promise<never> {
-  return Promise.reject(
-    new Error(
-      'A render queries through no checked-out connection whose settings were changed — beyond a transaction, or for the transaction still open — which the plans of the pool were not asked under: give every connection its settings as it connects, or query once the transaction has ended.',
-    ),
+function settingsError(): Error {
+  return new Error(
+    'A render queries through no checked-out connection whose settings were changed — beyond a transaction, or for the transaction still open — which the plans of the pool were not asked under: give every connection its settings as it connects, or query once the transaction has ended.',
   );
+}
+
+/** `settingsError`, as a promise a render's query is answered with. */
+function settingsRefused(): Promise<never> {
+  return Promise.reject(settingsError());
 }
 
 /** `connection`, a pool or one it checked out, its queries in a render noted by `plans`. */
 function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedOut: boolean): C {
   let client = connection;
+  /** Whether a statement of this checked-out connection changed its settings beyond a transaction. */
+  let changed = false;
+  /**
+   * Whether it holds a setting for its transaction, which a statement set and none has ended. A
+   * statement lets it go where PostgreSQL ran its end (`marking`), not as it is sent: the rest of a
+   * text stops at an error, and the transaction goes on holding what it held.
+   */
+  let scoped = false;
+  /** How many statements went through `marking`: which of them is the last. */
+  let sends = 0;
+  /** Whether a setting of this connection's differs from those the plans of the pool were asked under. */
+  const unplanned = (): boolean => {
+    // The transaction's own settings end with it.
+    if (scoped && !inTransaction(connection)) scoped = false;
+    return changed || scoped;
+  };
   const planner: Planner = {
     owner: connection,
     check: async (explain, values) => {
+      // A statement of the connection's own may have set one since the render was admitted.
+      if (unplanned()) throw settingsError();
       const nulls = Array.isArray(values) ? values.map(() => null) : [];
       try {
         await called(connection, 'query', [
@@ -164,23 +191,36 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     // By the simple protocol, of no values, which answers each statement of the text: a generic
     // plan takes none, and `check` has held the application's text to one statement.
     plan: async (explain, catalog) => {
+      if (unplanned()) throw settingsError();
       const text = catalog === undefined ? explain : `${catalog}; ${explain}`;
       const answered: unknown = await called(connection, 'query', [text]);
       return answerOf(Array.isArray(answered) ? answered : [answered], catalog);
     },
   };
-  /** Whether a statement of this checked-out connection changed its settings beyond a transaction. */
-  let changed = false;
   /**
-   * Whether it holds a setting for its transaction, which a statement set and none has ended: a
-   * statement that ends a transaction lets go of it as it goes, in whatever form it is written.
+   * Sends `text`, a statement of this checked-out connection outside a render, as `send` does,
+   * noting what it does of its settings. A connection idle holds no setting of a transaction — a
+   * `SET LOCAL` outside one set none — and the text that ends one lets go of it where it ran to its
+   * end (`scopedAfter`): where the answer is a promise and no statement went after it.
    */
-  let scoped = false;
-  /** Whether a setting of this connection's differs from those the plans of the pool were asked under. */
-  const unplanned = (): boolean => {
-    // The transaction's own settings end with it.
+  const marking = (text: string, send: () => unknown): unknown => {
     if (scoped && !inTransaction(connection)) scoped = false;
-    return changed || scoped;
+    if (plans.leavesSession(text)) changed = true;
+    const { ran, sent } = plans.scopedAfter(text, scoped);
+    scoped = sent;
+    sends += 1;
+    const mine = sends;
+    const answered = send();
+    if (ran !== sent && answered instanceof Promise) {
+      const ended = (): void => {
+        if (sends === mine) scoped = ran;
+      };
+      // Ahead of the caller's reaction, which must see it; a failure leaves the marker, which the
+      // connection's own state lets go of once it is idle.
+      // eslint-disable-next-line unicorn/prefer-then-catch -- the caller must see it at once
+      void answered.then(ended, ignored);
+    }
+    return answered;
   };
   const outside = (name: PropertyKey, args: readonly unknown[]): unknown =>
     retainedReceiver(called(connection, name, args), connection, client);
@@ -209,6 +249,9 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     }
     const { rebound, run, text, values } = statement;
     await noted(() => plans.readsOf(text, values, planner, rebound));
+    // A statement of the connection's own may have set one while the plan was asked: the reads
+    // noted are those of a plan of the pool's, which this statement would not run under.
+    if (unplanned()) await noted(() => settingsRefused());
     return called(connection, 'query', run);
   };
   const query = (first: unknown, ...rest: unknown[]): unknown => {
@@ -218,8 +261,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       statement !== undefined &&
       TRANSACTION.some((form) => form.test(statement.text))
     ) {
-      scoped = plans.scopedAfter(statement.text, scoped);
-      return called(connection, 'query', statement.run);
+      return marking(statement.text, () => called(connection, 'query', statement.run));
     }
     let noted: ReturnType<typeof tableReads>;
     try {
@@ -238,10 +280,9 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     }
     const text = textOf(first);
     if (checkedOut && typeof text === 'string') {
-      if (plans.leavesSession(text)) changed = true;
-      scoped = plans.scopedAfter(text, scoped);
+      return marking(text, () => outside('query', [first, ...rest]));
     }
-    if (!checkedOut && typeof text === 'string' && plans.changesOneSession(text)) {
+    if (typeof text === 'string' && plans.changesOneSession(text)) {
       return sessionRefused(first, rest, text);
     }
     return outside('query', [first, ...rest]);

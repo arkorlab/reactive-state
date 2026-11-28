@@ -128,36 +128,55 @@ function endsTransactionAt(tokens: readonly string[], at: number): boolean {
   return after !== 'prepared' && (after !== 'to' || tokens[at] !== 'rollback');
 }
 
-/** Whether the settings a transaction holds for itself are held after `tokens`, as `before` them. */
-function scopedOver(tokens: readonly string[], before: boolean): boolean {
-  let held = before;
+/**
+ * Whether the settings a transaction holds for itself (`SET LOCAL`, `set_config(…, true)`) are held
+ * after `tokens`, as `before` them: `sent`, while they go and where they stop short — one set stays,
+ * and the end of the transaction is not told, for a statement that fails before it never ran it —
+ * and `ran`, once every statement did, in the order the text has them.
+ */
+function scopedOver(tokens: readonly string[], before: boolean): Scoped {
+  let ran = before;
+  let sent = before;
   for (const [at, token] of tokens.entries()) {
     const opens = at === 0 || tokens[at - 1] === ';';
-    if (opens && endsTransactionAt(tokens, at)) held = false;
-    else if (
+    if (opens && endsTransactionAt(tokens, at)) {
+      ran = false;
+    } else if (
       (opens && token === 'set' && tokens[at + 1] === 'local') ||
       (identifierOf(token) === 'set_config' &&
         tokens[at + 1] === '(' &&
         setsForTransaction(tokens, at + 1))
     ) {
-      held = true;
+      ran = true;
+      sent = true;
     }
   }
-  return held;
+  return { ran, sent };
+}
+
+/** What a text does of the settings a transaction holds for itself (`scopedAfter`). */
+export interface Scoped {
+  /** Whether they are held while the text goes, or after a statement of it fails. */
+  readonly sent: boolean;
+  /** Whether they are held once every statement of it ran. */
+  readonly ran: boolean;
 }
 
 /**
- * Whether the settings a transaction holds for itself (`SET LOCAL`, `set_config(…, true)`) are held
- * after `sql`, a text of a connection's, where they `before` it were: set by a statement of it, let
+ * What `sql`, a text of a connection's, does of the settings a transaction holds for itself
+ * (`SET LOCAL`, `set_config(…, true)`) where they `before` it were: set by a statement of it, let
  * go of where a statement of it ends the transaction, whichever way it is written (`COMMIT;`,
- * `END`, `COMMIT AND CHAIN`), in the order the text has them. Read by each string syntax the
- * session may have, they are held where either reading holds them; of a text that cannot be read
- * in any, they may be, as a render through the connection is refused only while its transaction
- * is open.
+ * `END`, `COMMIT AND CHAIN`), in the order the text has them. Let go of only where the text ran to
+ * its end (`ran`): while it goes, or where it fails part-way, the transaction may be as it was
+ * (`sent`), and holds what it held. Read by each string syntax the session may have, they are held
+ * where either reading holds them; of a text that cannot be read in any, they may be, as a render
+ * through the connection is refused only while its transaction is open.
  */
-export function scopedAfter(sql: string, conforming: boolean, before: boolean): boolean {
+export function scopedAfter(sql: string, conforming: boolean, before: boolean): Scoped {
   const readings = readingsOf(sql, conforming);
-  return readings === undefined || readings.some((tokens) => scopedOver(tokens, before));
+  if (readings === undefined) return { ran: true, sent: true };
+  const each = readings.map((tokens) => scopedOver(tokens, before));
+  return { ran: each.some((one) => one.ran), sent: each.some((one) => one.sent) };
 }
 
 /** A temporary table's row type, which ordinary staging-table DDL intentionally does not follow. */
