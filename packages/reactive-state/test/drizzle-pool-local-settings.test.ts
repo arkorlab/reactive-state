@@ -319,6 +319,66 @@ describe('a render through a connection whose transaction may still hold what wa
   );
 });
 
+describe('a render through a connection whose statements were queued without awaiting each', () => {
+  it(
+    'is refused after the transaction and its `SET LOCAL` were queued, as when each is awaited',
+    async () => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofPool = await rendering(setup, setup.tracked);
+      const ofHeld = await rendering(setup, connection);
+
+      await expect(ofPool()).resolves.toContain('a,b');
+
+      await Promise.all([
+        connection.query('BEGIN'),
+        connection.query('SET LOCAL search_path = other'),
+        connection.query('SELECT 1'),
+      ]);
+
+      await expect(ofHeld()).rejects.toThrow(REFUSED);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'is read after a queued transaction that set nothing, once its statements were answered',
+    async () => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+
+      await Promise.all([
+        connection.query('SET LOCAL statement_timeout = 5000'),
+        connection.query('BEGIN'),
+        connection.query('SELECT 1'),
+        connection.query('COMMIT'),
+      ]);
+
+      await expect(ofHeld()).resolves.toContain('a,b');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'is read after a queued `COMMIT` of a transaction that set one, once it was answered',
+    async () => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+
+      await Promise.all([
+        connection.query('BEGIN'),
+        connection.query('SET LOCAL search_path = other'),
+        connection.query('COMMIT'),
+      ]);
+
+      await expect(ofHeld()).resolves.toContain('a,b');
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
 describe('the transaction-local settings a text leaves', () => {
   it.each([
     ['SET LOCAL search_path = other', false, true],
