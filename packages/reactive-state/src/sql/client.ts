@@ -12,7 +12,7 @@ import {
   refusedCall,
 } from './client-plans.ts';
 import { trackedPool } from './client-pool.ts';
-import { endsTransaction, sentToPostgres, TransactionWrites, undoes } from './client-writes.ts';
+import { endsTransaction, rollsBack, sentToPostgres, TransactionWrites } from './client-writes.ts';
 import type { Followed } from './keys.ts';
 import { boundOf } from './serialized.ts';
 
@@ -124,10 +124,9 @@ function tracked<C extends Connection>(connection: C, plans: Plans, writes?: Tra
     // code's own committed it before (`COMMIT`, `END`), which no throw of the callback undoes.
     if (name === 'rollback') writes?.undone();
     if (writes !== undefined && opening === '' && typeof sql === 'string') {
-      // A transaction's options and savepoints end nothing.
-      const own = OWN.some((form) => form.test(sql));
-      if (!own && undoes(sql)) writes.undone();
-      else if (!own && endsTransaction(sql)) writes.endedUnseen();
+      // A transaction's options and savepoints end nothing, nor does a rollback to one.
+      if (rollsBack(sql)) writes.undone();
+      else if (endsTransaction(sql)) writes.endedUnseen();
     }
     const run = () => underway(() => leaving(sentToPostgres(name, args, answered, writes)));
     if (name === 'execProtocolRawSync') return plans.outsideContextNow(run);

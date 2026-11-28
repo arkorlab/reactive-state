@@ -83,14 +83,56 @@ export function readsOnly(sql: string): boolean {
 const ENDINGS: ReadonlySet<string> = new Set(['abort', 'commit', 'end', 'rollback']);
 
 /**
+ * Whether `tokens`, a statement's, end the transaction under way: begin with one of `ENDINGS`, but
+ * for a rollback to a savepoint (`ROLLBACK TO sp`, which leaves what was written before it) and for
+ * a prepared transaction's commit or rollback (another transaction's).
+ */
+function endsIn(tokens: readonly string[]): boolean {
+  if (!ENDINGS.has(tokens[0] ?? '')) return false;
+  const next = tokens[1];
+  const after = next === 'work' || next === 'transaction' ? tokens[2] : next;
+  return after !== 'prepared' && (after !== 'to' || tokens[0] !== 'rollback');
+}
+
+/**
  * Whether a statement of `sql` ends the transaction under way, however the session reads its
  * strings: the forms `COMMIT;`, `END` or `COMMIT AND CHAIN`, which a client that reads a whole
- * `COMMIT` and `ROLLBACK` does not see end it.
+ * `COMMIT` and `ROLLBACK` does not see end it. A text no syntax reads may have.
  */
 export function endsTransaction(sql: string): boolean {
-  return [true, false].some(
-    (conforming) =>
-      readOf(sql, conforming)?.some((tokens) => ENDINGS.has(tokens[0] ?? '')) === true,
+  const readings = [true, false]
+    .map((conforming) => readOf(sql, conforming))
+    .filter((statements) => statements !== undefined);
+  return (
+    readings.length === 0 ||
+    readings.some((statements) => statements.some((tokens) => endsIn(tokens)))
+  );
+}
+
+/**
+ * Whether `sql` is one statement that rolls the whole transaction back — `ROLLBACK`, `ABORT`, with
+ * `WORK` or `AND CHAIN` — however its strings are read: not a rollback to a savepoint.
+ */
+export function rollsBack(sql: string): boolean {
+  return [true, false].every((conforming) => {
+    const statements = readOf(sql, conforming);
+    const [only] = statements ?? [];
+    return (
+      statements?.length === 1 &&
+      only !== undefined &&
+      (only[0] === 'rollback' || only[0] === 'abort') &&
+      endsIn(only)
+    );
+  });
+}
+
+/**
+ * Whether `answer` is a `pg` result of a command PostgreSQL ran as a `ROLLBACK`: the answer to the
+ * `COMMIT` of an aborted transaction, which it rolls back and raises no error of.
+ */
+export function answersRollback(answer: unknown): boolean {
+  return (
+    typeof answer === 'object' && answer !== null && Reflect.get(answer, 'command') === 'ROLLBACK'
   );
 }
 
@@ -100,7 +142,7 @@ function soleStatement(sql: string): boolean {
 }
 
 /** Whether `sql` is one statement that rolls a transaction back, however its strings are read. */
-export function undoes(sql: string): boolean {
+function undoes(sql: string): boolean {
   return UNDOES.test(sql) && soleStatement(sql);
 }
 
@@ -134,10 +176,12 @@ export class TransactionWrites {
   async #awaited(
     settled: Promise<unknown>,
     rolledBack: (error: unknown) => boolean,
+    undoneBy?: (answer: unknown) => boolean,
   ): Promise<unknown> {
     try {
       const value: unknown = await settled;
-      this.ended('landed');
+      if (undoneBy?.(value) === true) this.undone();
+      else this.ended('landed');
       return value;
     } catch (error) {
       // What went before an end the client did not read may have landed, whatever this error says.
@@ -181,14 +225,20 @@ export class TransactionWrites {
   /**
    * `settled`, which ends the transaction — its `COMMIT`, or a call that runs it whole — as it
    * ends its writes: landed as it answers, none where `rolledBack` says its error rolled it back or
-   * PostgreSQL refused it, of an outcome unknown otherwise, and where it ended unseen before.
+   * PostgreSQL refused it, of an outcome unknown otherwise, and where it ended unseen before. Where
+   * `undoneBy` says the answer is one of a rollback (a `COMMIT` of an aborted transaction), it is
+   * undone as a rollback undoes it.
    */
-  through(settled: unknown, rolledBack: (error: unknown) => boolean): unknown {
+  through(
+    settled: unknown,
+    rolledBack: (error: unknown) => boolean,
+    undoneBy?: (answer: unknown) => boolean,
+  ): unknown {
     if (!(settled instanceof Promise)) {
       this.ended('unknown');
       return settled;
     }
-    return this.#awaited(settled, rolledBack);
+    return this.#awaited(settled, rolledBack, undoneBy);
   }
 }
 
