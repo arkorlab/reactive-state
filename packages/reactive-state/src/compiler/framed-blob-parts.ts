@@ -18,7 +18,7 @@ import { quietReflectedBlob } from './framed-blob-reflected-inputs.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedNativeArguments } from './framed-native-arguments.ts';
 import { framedNativeErrorInput } from './framed-native-error-inputs.ts';
-import { framedObjectSources } from './framed-object-members.ts';
+import { framedTypedObjectSources, framedUnreadAssign } from './framed-object-members.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
@@ -102,10 +102,11 @@ function contentTypeWords(call: BlobCall, words: PartWords): boolean {
     if (seen.has(value)) continue;
     seen.add(value);
     const selected = blobOptions(value) ?? value;
-    const sources = framedObjectSources(selected, keys);
+    const sources = framedTypedObjectSources(selected, keys);
     if (sources !== undefined) {
       pending.push(...sources);
-      continue;
+      // What an assign with a source no reader follows holds is what its type says, as written.
+      if (!framedUnreadAssign(selected)) continue;
     }
     if (
       words.error(value, keys) ||
