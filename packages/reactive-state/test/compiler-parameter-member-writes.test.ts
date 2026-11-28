@@ -9,11 +9,39 @@ import { compilerApplications } from './support/compiler-applications.ts';
  * made for that call and held by nothing else, or one the function's own code replaces it with. Any
  * other value a call hands (a constant, what a call answers, a frozen object, an array, a page's
  * value) may be held elsewhere or be no plain object, and a parameter that may be assigned again
- * holds what the compile does not read: each stays refused.
+ * holds what the compile does not read: each stays refused. So does a parameter the function keeps
+ * where the walk of its reads does not follow it (in a list, a member, a closure) and one a call
+ * locks before a write; a replacement of the parameter is no write beside a sum written into the
+ * object it gives.
  */
 const MAKE = "function make(value: {id: string}) { value.id = 'fresh'; return value; }";
 const LOOSE = "function make(value: {id?: string}) { value.id = 'fresh'; return value; }";
 const PAYLOAD = " export const payload = make({id: 'safe'});";
+
+const WIDE = '{id: string; bad?: unknown; extra?: string}';
+/** A factory of an object that has room for the members the rows write, called as `PAYLOAD` does. */
+function wide(body: string): string {
+  return `function make(value: ${WIDE}) { ${body} }${PAYLOAD}`;
+}
+
+const NESTED = " export const payload = make({meta: {id: 'safe'}});";
+
+const IDENTITY = 'function identity<T>(target: T) { return target; }';
+const OPTIONAL = '{id: string; extra?: string; meta?: {bad?: unknown; id?: string}}';
+/** A factory of an object whose members the rows may leave out, called as `PAYLOAD` does. */
+function optional(body: string): string {
+  return `function make(value: ${OPTIONAL}) { ${body} }${PAYLOAD}`;
+}
+
+/** A factory as `wide` makes it, with a helper declared before it. */
+function answered(helper: string, body: string): string {
+  return `${helper} ${wide(body)}`;
+}
+
+/** A factory of a number list, called with `[0]`. */
+function counted(body: string): string {
+  return `function make(value: number[]) { ${body} } export const payload = make([0]);`;
+}
 
 describe('shared factory parameter member writes', () => {
   const { apps, compile } = compilerApplications();
@@ -136,6 +164,416 @@ describe('shared factory parameter member writes', () => {
 
     expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
   });
+
+  // The compile reads the object a parameter holds only where the function's own code keeps it
+  // nowhere the walk of its reads does not follow, and writes into it before anything locks it.
+  // Otherwise a member write is a change, as it was before the object was read at all.
+  it.each([
+    wide('const wrapper = {target: value}; return wrapper.target;'),
+    wide(
+      "const wrapper = {target: {id: 'other'}}; wrapper.target.id = 'x'; value.id = 'fresh'; return value;",
+    ),
+    wide("value.id = 'fresh'; return [value];"),
+    wide("value.id = 'fresh'; return {value};"),
+    wide("value.id = 'fresh'; return value.id === 'safe' ? value : {id: 'other'};"),
+    wide("const copy = {...value}; copy.bad = 1; value.id = 'fresh'; return copy;"),
+    wide("console.log(value); value.id = 'fresh'; return value;"),
+    wide("const alias = value; const again = alias; again.id = 'fresh'; return value;"),
+    wide("value.extra = value.id; value.id = 'fresh'; return value;"),
+    wide("value.extra = value.id || 'none'; value.id = 'fresh'; return value;"),
+    wide("const alias = value; alias.extra = value.id; value.id = 'fresh'; return value;"),
+    wide("const swap = () => { value.id = 'fresh'; }; swap(); return value;"),
+  ])('keeps a member write into a parameter nothing keeps elsewhere: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  it.each([
+    wide(
+      "const wrapper = {target: value}; wrapper.target.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "value.id = 'fresh'; const wrapper = {target: value}; wrapper.target.bad = new Date(0); return value;",
+    ),
+    wide(
+      "const alias = value; const wrapper = {target: alias}; wrapper.target.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    wide("const list = [value]; list[0].bad = new Date(0); value.id = 'fresh'; return value;"),
+    wide(
+      `const holder: {target?: ${WIDE}} = {}; holder.target = value; (holder.target as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`,
+    ),
+    wide("const get = () => value; get().bad = new Date(0); value.id = 'fresh'; return value;"),
+    wide(
+      `const pick = value.id === 'safe' ? value : {id: 'other'}; (pick as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`,
+    ),
+    wide(
+      "value = {id: 'fresh'}; const wrapper = {target: value}; wrapper.target.bad = new Date(0); value.id = 'safe'; return value;",
+    ),
+    // The walk does not tell a wrapper nothing writes through from one something does.
+    wide("const wrapper = {target: value}; value.id = 'fresh'; return value;"),
+  ])(
+    'refuses a member write into a parameter kept in an alias the walk misses: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+    },
+  );
+
+  it.each([
+    wide("value.id = 'fresh'; Object.freeze(value); return value;"),
+    wide("value.id = 'fresh'; return Object.freeze(value);"),
+    wide("value.id = 'fresh'; Object.seal(value); Object.preventExtensions(value); return value;"),
+    wide("Object.freeze({id: 'other'}); value.id = 'fresh'; return value;"),
+    wide('Object.freeze(value); return value;'),
+    wide("value.id = 'fresh'; Object.freeze(value); const id = value.id; return {id};"),
+    wide("Object.freeze(value); value = {id: 'fresh'}; value.id = 'safe'; return value;"),
+    `function make(value: {meta: {id: string}}) { value.meta.id = 'fresh'; Object.freeze(value.meta); return value; }${NESTED}`,
+  ])('keeps a member write before the call that locks the parameter: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  it.each([
+    wide("Object.freeze(value); value.id = 'fresh'; return value;"),
+    wide("Object.seal(value); value.extra = 'added'; return value;"),
+    wide("Object.preventExtensions(value); value.extra = 'added'; return value;"),
+    wide("Reflect.preventExtensions(value); value.extra = 'added'; return value;"),
+    wide(
+      "Object.defineProperty(value, 'id', {writable: false}); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "Object.defineProperties(value, {id: {writable: false}}); value.id = 'fresh'; return value;",
+    ),
+    wide("const alias = value; Object.freeze(alias); value.id = 'fresh'; return value;"),
+    wide("const alias = value; Object.freeze(value); alias.id = 'fresh'; return value;"),
+    wide("for (const id of ['a', 'b']) { value.id = id; Object.freeze(value); } return value;"),
+    wide("const swap = () => { value.id = 'fresh'; }; Object.freeze(value); swap(); return value;"),
+    wide("const lock = () => Object.freeze(value); lock(); value.id = 'fresh'; return value;"),
+    wide("if (value.id === 'safe') { Object.freeze(value); } value.id = 'fresh'; return value;"),
+    wide("value = {id: 'fresh'}; Object.freeze(value); value.id = 'safe'; return value;"),
+    `function make(value: {meta: {id: string}}) { Object.freeze(value.meta); value.meta.id = 'fresh'; return value; }${NESTED}`,
+  ])('refuses a member write after a call locks the parameter: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  // The replacement is the write that gives the parameter the object the compile reads, so it is no
+  // write beside the sum; another write of the member, before it or after, is.
+  it.each([
+    counted('value = [1]; value[0] += 1; return value;'),
+    counted('value = [1]; value[0] *= 2; return value;'),
+    counted('value = [1]; value[0]++; return value;'),
+    counted('var value = [1]; value[0] += 1; return value;'),
+    'function make(value: {n: number}) { value = {n: 1}; value.n += 1; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { value = {n: 1}; value.n -= 1; return value; } export const payload = make({n: 0});',
+  ])('keeps a sum written into the object a parameter was replaced with: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  it.each([
+    counted('value = [1]; value[0] += 1; value[0] += 1; return value;'),
+    counted('value = [1]; value[0] = 5; value[0] += 1; return value;'),
+    counted('value[0] += 1; value = [1]; value[0] += 1; return value;'),
+    counted('value = [1]; const add = () => { value[0] += 1; }; add(); add(); return value;'),
+    counted('value = [1e308]; value[0] += 1e308; return value;'),
+    counted('value = [1e308]; value[0] *= 2; return value;'),
+    'function make(value: {n: number}) { value = {n: 1e308}; value.n += 1e308; return value; } export const payload = make({n: 0});',
+  ])(
+    'refuses a sum of a replaced parameter that is not alone or not finite: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+    },
+  );
+
+  // A value that only a condition, a comparison or an operator reads is kept nowhere, however many
+  // `||`, `&&`, `??` it passes through; one a name, a member, a call or a list takes stays kept.
+  it.each([
+    wide("if (value.id || false) { value.id = 'fresh'; } return value;"),
+    wide("if (value.id ?? 'none') { value.id = 'fresh'; } return value;"),
+    wide(
+      "while (value.id && value.extra) { value.extra = undefined; } value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const same = (value.id || '') === 'safe'; value.id = 'fresh'; return same ? value : value;",
+    ),
+    wide("const label = value.id || value.extra ? 'a' : 'b'; value.id = label; return value;"),
+    wide("const none = !(value.id || value.extra); value.id = none ? 'a' : 'b'; return value;"),
+    wide(`const text = \`\${value.id || 'none'}!\`; value.id = text; return value;`),
+    wide("const same = (value || {id: 'x'}) === value; value.id = same ? 'a' : 'b'; return value;"),
+    wide("switch (value.id || 'none') { case 'safe': value.id = 'fresh'; } return value;"),
+  ])('keeps a member write into a parameter that only a condition reads: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  it.each([
+    wide(
+      `const alias = value || {id: 'x'}; (alias as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`,
+    ),
+    wide("const wrapper = {target: value.id || value}; value.id = 'fresh'; return value;"),
+    wide(
+      `const list = [value || {id: 'x'}]; (list[0] as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`,
+    ),
+    wide(`((value || {id: 'x'}) as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`),
+    wide("console.log(value || {id: 'x'}); value.id = 'fresh'; return value;"),
+  ])('refuses a member write into a parameter a carried value is kept of: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  // A helper that answers what it is handed answers the parameter itself: the name the answer is
+  // taken into is one the walk of the parameter's reads does not follow.
+  it.each([
+    answered(
+      IDENTITY,
+      "const alias = identity(value); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    answered(
+      'const identity = <T,>(target: T) => target;',
+      "const alias = identity(value); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    answered(
+      `function orEmpty(target: ${WIDE} | undefined) { return target ?? {id: 'x'}; }`,
+      "const alias = orEmpty(value); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    answered(
+      `function passed(target: ${WIDE}) { const kept = target; return kept; }`,
+      "const alias = passed(value); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    answered(IDENTITY, "identity(value).bad = new Date(0); value.id = 'fresh'; return value;"),
+    answered(
+      IDENTITY,
+      `const holder: {target?: ${WIDE}} = {}; holder.target = identity(value); value.id = 'fresh'; return value;`,
+    ),
+    answered(
+      IDENTITY,
+      "value.id = 'fresh'; const alias = identity(value); alias.bad = new Date(0); return value;",
+    ),
+  ])('refuses a member write into a parameter a helper answers: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    answered(IDENTITY, "identity(value); value.id = 'fresh'; return value;"),
+    answered(IDENTITY, "value.id = 'fresh'; return identity(value);"),
+    answered(
+      IDENTITY,
+      "const same = identity(value) === value; value.id = same ? 'a' : 'b'; return value;",
+    ),
+    answered(
+      'function tidy(text: string) { return text.trim(); }',
+      "const copy = tidy(value.id); value.id = 'fresh'; value.extra = copy; return value;",
+    ),
+    answered(
+      `function size(target: ${WIDE}) { return String(target.id).length; }`,
+      "const length = size(value); value.id = 'fresh'; value.extra = String(length); return value;",
+    ),
+    answered(
+      `function first(target: ${WIDE}, other: ${WIDE}) { return other; }`,
+      "const alias = first(value, {id: 'other'}); alias.bad = 1; value.id = 'fresh'; return value;",
+    ),
+    answered(
+      IDENTITY,
+      "const alias = identity({id: 'other'}); alias.id = 'x'; value.id = 'fresh'; return value;",
+    ),
+  ])('keeps a member write into a parameter that no helper answers: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  // A name a `const` binds of a parameter holds the object it holds as the parameter does, so a sum
+  // that is not alone is refused of it as of the parameter, and one that is alone is folded.
+  it.each([
+    'function make(value: {n: number}) { const alias = value; alias.n += 1e308; alias.n += 1e308; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { const alias = value; const again = alias; again.n += 1e308; again.n += 1e308; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { const alias = value; alias.n += 1e308; value.n += 1e308; return value; } export const payload = make({n: 0});',
+    'function make(value: {meta: {n: number}}) { const meta = value.meta; meta.n += 1e308; meta.n += 1e308; return value; } export const payload = make({meta: {n: 0}});',
+    'function make(value: {meta: {n: number}}) { const {meta} = value; meta.n += 1e308; meta.n += 1e308; return value; } export const payload = make({meta: {n: 0}});',
+    'function make(value: {n: number}) { const alias = value; alias.n += 1e308; return value; } export const payload = make({n: 1e308});',
+    'function make(value: {n: number}) { const alias = value; for (const at of [1, 2]) { alias.n += 1e308; } return value; } export const payload = make({n: 0});',
+  ])('refuses a sum written into a name a parameter is taken into: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    'function make(value: {n: number}) { const alias = value; alias.n += 1; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { const alias = value; const again = alias; again.n -= 1; return value; } export const payload = make({n: 0});',
+    'function make(value: {meta: {n: number}}) { const meta = value.meta; meta.n += 1; return value; } export const payload = make({meta: {n: 0}});',
+    'function make(value: {items: {n: number}[]}) { for (const item of value.items) { item.n += 1; } return value; } export const payload = make({items: [{n: 0}]});',
+  ])('keeps a sum that is alone in a name a parameter is taken into: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  // `Object.assign` answers the object it is handed first, as a helper that returns its input does.
+  it.each([
+    wide(
+      "const alias = Object.assign(value, {}); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    wide("Object.assign(value, {}).bad = new Date(0); value.id = 'fresh'; return value;"),
+    wide(
+      "const holder: {target?: unknown} = {}; holder.target = Object.assign(value, {}); (holder.target as {bad?: unknown}).bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "value.id = 'fresh'; const alias = Object.assign(value, {}); alias.bad = new Date(0); return value;",
+    ),
+  ])('refuses a member write into a parameter that Object.assign answers: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    wide("Object.assign(value, {extra: 'more'}); value.id = 'fresh'; return value;"),
+    wide(
+      "const copy = Object.assign({}, value); copy.extra = 'more'; value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const other = Object.assign({id: 'other'}, {extra: 'more'}); other.id = 'x'; value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const same = Object.assign(value, {}) === value; value.id = same ? 'a' : 'b'; return value;",
+    ),
+    wide("value.id = 'fresh'; const frozen = Object.freeze(value); return frozen;"),
+  ])(
+    'keeps a member write into a parameter that Object.assign answers nowhere: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(compile(app).refusals).toStrictEqual([]);
+    },
+  );
+
+  // A member of the parameter written into itself, or into a member of itself, makes an object that
+  // holds itself, as the parameter written into itself does.
+  it.each([
+    'function make(value: {meta: {self?: unknown}}) { value.meta.self = value.meta; return value; } export const payload = make({meta: {}});',
+    'function make(value: {a: {b: {up?: unknown}}}) { value.a.b.up = value.a; return value; } export const payload = make({a: {b: {}}});',
+    "function make(value: {meta: {self?: unknown}}) { value['meta'].self = value['meta']; return value; } export const payload = make({meta: {}});",
+    'function make(value: {meta: {self?: unknown}}) { (value.meta as {self?: unknown}).self = value.meta; return value; } export const payload = make({meta: {}});',
+    'function make(value: {list: unknown[]}) { value.list.push(value.list); return value; } export const payload = make({list: []});',
+    'function make(value: {meta: {self?: unknown}}) { value.meta.self ??= value.meta; return value; } export const payload = make({meta: {}});',
+  ])('refuses a member of a parameter written into itself: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    'function make(value: {meta: {id: string}; other?: unknown}) { value.other = value.meta; return value; } export const payload = make({meta: {id: "safe"}});',
+    'function make(value: {meta: {id: string; copy?: string}}) { value.meta.copy = value.meta.id; return value; } export const payload = make({meta: {id: "safe"}});',
+    'function make(value: {meta: {self?: unknown}; other: {link?: unknown}}) { value.other.link = value.meta; return value; } export const payload = make({meta: {}, other: {}});',
+    'function make(value: {id: string; meta: {id?: string}}) { value.meta.id = value.id; return value; } export const payload = make({id: "safe", meta: {}});',
+  ])('keeps a member of a parameter written into another member: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  // A closure that answers a member of the parameter keeps the parameter, whatever the member holds,
+  // since the compile reads no types; one that computes from the member keeps nothing.
+  it.each([
+    wide("const get = () => value.id; value.extra = get(); value.id = 'fresh'; return value;"),
+    wide(
+      "const ids = [1, 2].map(() => value.id); value.extra = ids.join(); value.id = 'fresh'; return value;",
+    ),
+    "function make(value: {id: string; meta: {bad?: unknown}}) { const get = () => value.meta; (get() as {bad?: unknown}).bad = new Date(0); value.id = 'fresh'; return value; } export const payload = make({id: 'safe', meta: {}});",
+  ])(
+    'refuses a member write into a parameter a closure answers a member of: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+    },
+  );
+
+  it.each([
+    wide(
+      "const get = () => value.id.trim(); value.extra = get(); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const get = () => value.id + '!'; value.extra = get(); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const same = () => value.id === 'safe'; value.extra = String(same()); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const sizes = [1, 2].map(() => value.id.trim()); value.extra = sizes.join(); value.id = 'fresh'; return value;",
+    ),
+  ])(
+    'keeps a member write into a parameter a closure computes from a member of: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(compile(app).refusals).toStrictEqual([]);
+    },
+  );
+
+  // A logical assignment answers the member it leaves, which is what the parameter holds there: the
+  // name that takes the answer names it by a name the walk does not read, as a member's own alias
+  // is refused where the code assigns the member an object and then writes into it.
+  it.each([
+    'const meta = (value.meta ??= {}); meta.bad = new Date(0); return value;',
+    "const meta = (value.meta ||= {}); meta.id = 'x'; return value;",
+    '(value.meta ??= {}).bad = new Date(0); return value;',
+    'const holder: {target?: unknown} = {}; holder.target = (value.meta ??= {}); (holder.target as {bad?: unknown}).bad = new Date(0); return value;',
+    "const meta = (value.meta ??= {}); meta.bad = new Date(0); value.id = 'fresh'; return value;",
+  ])('refuses a member write into a parameter a logical assignment answers: %s', async (body) => {
+    const app = await fixture(optional(body));
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    'value.meta ??= {}; return value;',
+    "value.extra ||= 'none'; value.id = 'fresh'; return value;",
+    "if (value.extra ??= 'none') { value.id = 'fresh'; } return value;",
+    "const same = (value.extra ??= 'none') === value.extra; value.id = same ? 'a' : 'b'; return value;",
+    "[1, 2].forEach((each) => (value.extra = String(each))); value.id = 'fresh'; return value;",
+  ])(
+    'keeps a member write into a parameter a logical assignment answers nowhere: %s',
+    async (body) => {
+      const app = await fixture(optional(body));
+      apps.push(app);
+
+      expect(compile(app).refusals).toStrictEqual([]);
+    },
+  );
 
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
