@@ -4,7 +4,7 @@ import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
 import type { RowWrite } from '../program.ts';
 import { boolean, type FieldDefinition, integer, type TableRows, text } from '../server/schema.ts';
 import { qualified, quoted } from './capture.ts';
-import { codeOf } from './client.ts';
+import { codeOf } from './client-plans.ts';
 import type { Queryable } from './digest.ts';
 import type { KeyColumn } from './keys.ts';
 import { keyDigest } from './reads.ts';

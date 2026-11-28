@@ -123,11 +123,12 @@ export interface DrizzleFollow<S> {
    */
   readonly captureSql: () => readonly string[];
   /**
-   * `client`, a PGlite, whose queries in a render note the tables they read: Drizzle's client, and
-   * the connection a state bound to a row reads and writes it through — the last one given. A
-   * serializer the application gave it (`PGlite.create({ serializers })`) answers the same text of
-   * the same value each time it is called, and changes nothing as it is: a render's condition is
-   * followed by the text it answers, which is asked before the value is bound.
+   * `client`, a PGlite or a `pg.Pool`, whose queries in a render note the tables they read: Drizzle's
+   * client, and the connection a state bound to a row reads and writes it through — the last one
+   * given. One `pg.Client` is refused, as a transaction on it would hold what every render reads. A
+   * serializer the application gave a PGlite (`PGlite.create({ serializers })`) answers the same
+   * text of the same value each time it is called, and changes nothing as it is: a render's
+   * condition is followed by the text it answers, which is asked before the value is bound.
    */
   readonly client: <C extends Connection>(client: C) => C;
   /** The store the host gives the authority, which reads the log through `client`. */

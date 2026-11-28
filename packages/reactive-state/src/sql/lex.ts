@@ -134,11 +134,31 @@ function continuedAt(sql: string, at: number): boolean {
   return false;
 }
 
+/** A string or a dollar-quoted body of a text, as it was written between its quotes. */
+export interface QuotedRun {
+  /** Whether it is a dollar-quoted body (`$$…$$`) and not a string (`'…'`). */
+  readonly dollar: boolean;
+  readonly text: string;
+}
+
+/** Keeps in `runs` the string or dollar-quoted body that runs from `at` to `end` of `sql`. */
+function keepRun(sql: string, at: number, end: number, runs: QuotedRun[]): void {
+  if (sql[at] === "'") {
+    runs.push({ dollar: false, text: sql.slice(at + 1, end - 1) });
+    return;
+  }
+  DOLLAR.lastIndex = at;
+  const [opening] = DOLLAR.exec(sql) ?? [];
+  if (opening !== undefined) {
+    runs.push({ dollar: true, text: sql.slice(at + opening.length, end - opening.length) });
+  }
+}
+
 /**
  * `sql` in lower case, of no comment, string or dollar-quoted body, each quoted name a `"` — one of
  * Unicode escapes (`U&"x"`) a `` ` ``, after which `UESCAPE` may stand.
  */
-function plainOf(sql: string, conforming: boolean): string | undefined {
+function plainOf(sql: string, conforming: boolean, runs?: QuotedRun[]): string | undefined {
   const plain: string[] = [];
   let at = 0;
   while (at < sql.length) {
@@ -148,6 +168,7 @@ function plainOf(sql: string, conforming: boolean): string | undefined {
       plain.push(lowered(sql[at] ?? ''));
       at += 1;
     } else {
+      if (runs !== undefined && (sql[at] === "'" || sql[at] === '$')) keepRun(sql, at, end, runs);
       if (sql[at] === '"' && !opensUnicode(plain)) {
         plain.push('"', sql.slice(at + 1, end - 1), '"');
       } else {
@@ -227,6 +248,16 @@ export function sqlTokens(sql: string, conforming: boolean): readonly string[] |
   }
   pushTokens(tokens, plain.slice(at));
   return tokens;
+}
+
+/**
+ * Each string and dollar-quoted body of `sql`, in the order the `'` of its tokens stand for them
+ * (`sqlTokens`): the code a `DO` block runs is written in one of them. Nothing where the text
+ * cannot be read, as `sqlTokens` says.
+ */
+export function quotedRuns(sql: string, conforming: boolean): readonly QuotedRun[] | undefined {
+  const runs: QuotedRun[] = [];
+  return plainOf(sql, conforming, runs) === undefined ? undefined : runs;
 }
 
 /**
