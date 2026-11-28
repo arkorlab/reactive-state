@@ -67,6 +67,32 @@ const CASES: readonly Case[] = [
     source: `function frames(error:Error){void error;${BOX}const sources:object[]=[{other:1},{other:2}];sources[1]={inner:{stack:'fixed'}};Object.assign(box,...sources);${READ}}`,
     refused: false,
   },
+  // A property the array is given under another name is no entry: a spread never yields it.
+  {
+    id: 'exposed-spread-named-property-written-data',
+    source: `function frames(error:Error){void error;${BOX}const sources:object[]&{meta?:{inner:Error}}=[{other:1}];sources['meta']={inner:error};Object.assign(box,...sources);return box.inner?.stack;}`,
+    refused: false,
+  },
+  {
+    id: 'past-unread-spread-named-property-written-data',
+    source: `function frames(error:Error,...unread:object[]){void error;${BOX}const sources:object[]&{meta?:{inner:Error}}=[{other:1}];sources['meta']={inner:error};Object.assign(box,...unread,...sources);return box.inner?.stack;}`,
+    refused: false,
+  },
+  {
+    id: 'exposed-spread-non-canonical-index-written-data',
+    source: `function frames(error:Error){void error;${BOX}const sources:object[]=[{other:1}];sources['-1']={inner:error};sources['01']={inner:error};sources[1.5]={inner:error};Object.assign(box,...sources);return box.inner?.stack;}`,
+    refused: false,
+  },
+  {
+    id: 'exposed-spread-canonical-string-index-written',
+    source: `function frames(error:Error){${BOX}const sources:object[]=[{other:1},{other:2}];sources['1']={inner:error};Object.assign(box,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'exposed-spread-unknown-index-written',
+    source: `function frames(error:Error,at:number){${BOX}const sources:object[]=[{other:1},{other:2}];sources[at]={inner:error};Object.assign(box,...sources);${READ}}`,
+    refused: true,
+  },
   // A limit: an entry pushed to the array is no write the compile follows.
   {
     id: 'past-unread-spread-entry-pushed-limit',

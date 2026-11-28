@@ -43,7 +43,7 @@ import {
   tupleBindingExposure,
 } from './framed-tuple-work.ts';
 import { framedPossibleBranch, repeatedBodyRead, repeatedFrameRead } from './framed-writes.ts';
-import { constantValue } from './numbers.ts';
+import { type Constant, constantValue } from './numbers.ts';
 
 export { framedKeyNames } from './framed-key-names.ts';
 
@@ -435,9 +435,23 @@ function tupleWriteBefore(
   return false;
 }
 
+/** The last canonical index of an array: a larger number, or any other name, is no entry's. */
+const ARRAY_INDEX = { last: 4_294_967_294 } as const;
+
+/**
+ * Whether a written index may name an entry of an array: one the compile cannot tell, or a canonical
+ * one.
+ */
+function entryIndex(index: Constant | undefined): boolean {
+  if (index === undefined) return true;
+  const text = String(index);
+  return /^(?:0|[1-9]\d*)$/u.test(text) && Number(text) <= ARRAY_INDEX.last;
+}
+
 /**
  * Only slot zero of the same lexical tuple or resolved constant alias supplies its receiver; any
- * entry of it, whatever index names it, may supply a value of it.
+ * entry of it, whatever index names it, may supply a value of it, and no property it is given under
+ * another name (`sources['meta']`), which a spread of the array never yields.
  */
 function tupleEntry(
   target: Expression,
@@ -447,7 +461,7 @@ function tupleEntry(
   const value = unwrapped(target);
   if (!isElementAccessExpression(value)) return false;
   const index = constantValue(value.argumentExpression);
-  if (entries === 'first' && index !== 0 && index !== '0') return false;
+  if (entries === 'first' ? index !== 0 && index !== '0' : !entryIndex(index)) return false;
   const holder = unwrapped(value.expression);
   const selected = isIdentifier(holder) ? frameBindingOf(holder) : undefined;
   return selected?.keys.length === 0 && aliases.has(selected.binding);
