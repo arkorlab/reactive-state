@@ -1,18 +1,18 @@
-import { isJson } from '../authority/canonical.ts';
-import { type FieldRef, type Json, REFERENCE, type Value } from '../program.ts';
+import { type FieldRef, REFERENCE, type Value } from '../program.ts';
 import { currentEvaluation, type Entry, type Evaluation } from './context.ts';
+import { isFollowedTable } from './followed-table.ts';
 
 /**
  * The application's database as it declares it (`@/db`), and what its modules read and write it
  * through while the authority evaluates them. The authority keeps every record; the declaration
  * says which tables there are, what each field holds — and so what a write may put there — which
  * fields a page without a session may show, which fields no two records of a table may hold alike,
- * and the records the authority starts with. A table the declaration names `external` is none of
- * the authority's: its records are a database of the application's own, which the authority reads
- * through the store its host gives it by that name, and follows the change log of — read-only to
- * the application's components and operations alike, as its own code writes it. Of a table of a
- * Drizzle schema alone, a state may bind one column of one row (`db.<table>.where(…)`), which its
- * setter writes through the application's own connection.
+ * and the records the authority starts with. A table a follow of the application's Drizzle schema
+ * declares (`followDrizzle`, `followed-table.ts`) is none of the authority's: its records are a
+ * database of the application's own, which its SQL reads, and the authority follows the change log
+ * of through the store the follow brings — read-only to `db` in the application's components and
+ * operations alike, as its own code writes it. Of such a table, a state may bind one column of one
+ * row (`db.<table>.where(…)`), which its setter writes through the application's own connection.
  */
 
 /** The longest text a field may hold, in UTF-16 units, as `<input maxLength>` counts them. */
@@ -47,22 +47,12 @@ interface IntegerDefinition {
   readonly default: number;
 }
 
-/** A document an external table's store answers whole, as JSON: `null` where it holds none. */
-interface JsonDefinition {
-  readonly type: 'json';
-  readonly default: null;
-}
-
-export type FieldDefinition =
-  | BooleanDefinition
-  | IntegerDefinition
-  | JsonDefinition
-  | TextDefinition;
+export type FieldDefinition = BooleanDefinition | IntegerDefinition | TextDefinition;
 
 /** A field of a table: what it holds, with the type of its value for the application's code. */
-export type Field<T extends Json> = FieldDefinition & { readonly [FIELD_VALUE]?: T };
+export type Field<T extends Value> = FieldDefinition & { readonly [FIELD_VALUE]?: T };
 
-type Fields = Readonly<Record<string, Field<Json>>>;
+type Fields = Readonly<Record<string, Field<Value>>>;
 
 /** The type of the value a field holds. */
 export type FieldType<F> = F extends Field<infer T> ? T : never;
@@ -72,18 +62,13 @@ export type RecordOf<F extends Fields> = {
   readonly [K in keyof F]: FieldType<F[K]>;
 } & { readonly id: string };
 
-/** The fields a query may ask of and order by: each but a document (`json()`). */
-type Comparable<F extends Fields> = {
-  readonly [K in keyof F]: FieldType<F[K]> extends Value ? K : never;
-}[keyof F];
-
 /**
  * What a query asks of a record: each field it names equal to the value given — the record's `id`
  * too — and all of them together. A field given `undefined` is not asked of, as a condition that
  * is there in one branch of the application's code and not in the other leaves it.
  */
 export type Where<F extends Fields> = {
-  readonly [K in Comparable<F>]?: FieldType<F[K]> | undefined;
+  readonly [K in keyof F]?: FieldType<F[K]> | undefined;
 } & { readonly id?: string | undefined };
 
 /** The fields a query answers of each record, its `id` among them where it is named. */
@@ -99,7 +84,7 @@ export type Selected<F extends Fields, S> = {
     : FieldType<F[K & keyof F]>;
 };
 
-type Sortable<F extends Fields> = (Comparable<F> & string) | 'id';
+type Sortable<F extends Fields> = (keyof F & string) | 'id';
 
 /** One key of an order: a field, or `id`, ascending or descending. One key to each. */
 export type Order<F extends Fields> = {
@@ -149,8 +134,9 @@ export interface Table<F extends Fields = Fields> {
   /** The groups of fields no two records of the table may hold the same values of. */
   readonly unique: readonly (readonly string[])[];
   /**
-   * The store the table's records are read through, by the name its host gives it, where they are
-   * a database of the application's own: none for a table the authority keeps.
+   * The store the table's changes are followed through, by its name, where its records are a
+   * database of the application's own: of a table a follow declares (`followed-table.ts`) alone,
+   * none for a table the authority keeps.
    */
   readonly external?: string | undefined;
   /** How a state binds the table's rows: of a table of a Drizzle schema alone. */
@@ -167,7 +153,7 @@ export interface TableHandle<F extends Fields> {
   readonly get: (id: string) => Promise<RecordOf<F> | null>;
   /** A reference to each field of the record, for a component to bind its state to. */
   readonly ref: (id: string) => {
-    readonly [K in Comparable<F> & string]: FieldRef<FieldType<F[K]> & Value>;
+    readonly [K in keyof F & string]: FieldRef<FieldType<F[K]>>;
   };
   /** The records `where` names, in the order asked for: by `id` where none is. */
   readonly findMany: {
@@ -290,15 +276,6 @@ export function integer(
 }
 
 /**
- * A document of an external table's, as its store answers it: JSON, read-only, which no query asks
- * of or orders by. A table the authority keeps holds none: what it would put there is a state's.
- */
-export function json(): Field<Json> {
-  const definition: JsonDefinition = { default: null, type: 'json' };
-  return Object.freeze(definition);
-}
-
-/**
  * A field as its factory declares it, which checks it, whatever the application gave: a call of
  * the factory, or an object written by hand, as a caller in JavaScript, or through `any`, may give.
  */
@@ -323,13 +300,8 @@ function fieldOf(name: string, definition: unknown): FieldDefinition {
         min: written['min'] as number | undefined,
       });
     }
-    case 'json': {
-      return json();
-    }
     default: {
-      return fail(
-        `\`${name}\` is no field: a field is declared by text(), boolean(), integer() or json()`,
-      );
+      return fail(`\`${name}\` is no field: a field is declared by text(), boolean() or integer()`);
     }
   }
 }
@@ -361,50 +333,27 @@ function uniqueOf(fields: Fields, unique: unknown): readonly (readonly string[])
 }
 
 /**
- * What an external table may not declare: what the authority keeps of a table of its own — its
- * fields a page of no session shows, its `unique` groups, which its writes are held to — and a
- * store's name that is none.
+ * The refusal of a table read through a store that no follow declares: a table of the application's
+ * own database is one of its Drizzle schema, which a follow declares (`followed-table.ts`).
  */
-function checkExternal(
-  external: unknown,
-  options: {
-    readonly public?: readonly unknown[] | undefined;
-    readonly unique?: readonly unknown[] | undefined;
-  },
-): void {
-  if (external === undefined) {
-    return;
-  }
-  // Text alone, as a caller in JavaScript, or through `any`, may give another value: `NAME` would
-  // test the text it converts to, and take `null`, `true` or `['store']` for a name.
-  if (typeof external !== 'string') {
-    fail("a store's name is text: a letter, then letters, digits or _");
-  }
-  if (!NAME.test(external)) {
-    fail(`\`${external}\` is not a store's name: a letter, then letters, digits or _`);
-  }
-  if ((options.public?.length ?? 0) > 0 || (options.unique?.length ?? 0) > 0) {
-    fail(
-      `a table of the store \`${external}\` declares no public fields and no unique groups: the authority keeps neither of a database of the application's own`,
-    );
-  }
+function notFollowed(what: string): never {
+  return fail(
+    `${what}: a table of the application's own database is one of its Drizzle schema, which \`followDrizzle()\` of \`./drizzle\` follows`,
+  );
 }
 
+/** A table the authority keeps: its fields, those a page of no session shows, and its unique groups. */
 export function table<F extends Fields>(
   fields: F,
   options: {
     readonly public?: readonly (keyof F & string)[];
     readonly unique?: readonly (readonly (keyof F & string)[])[] | undefined;
-    /**
-     * The store, by the name its host gives it, the table's records are read through: a database
-     * of the application's own, which the authority follows the change log of, and writes only
-     * where a state binds a row of a table of a Drizzle schema (`TableRows`).
-     */
-    readonly external?: string | undefined;
   } = {},
 ): Table<F> {
-  const { external } = options;
-  checkExternal(external, options);
+  // As a caller in JavaScript, or through `any`, may still give it.
+  if ((options as { readonly external?: unknown }).external !== undefined) {
+    notFollowed('`external` is no option of table()');
+  }
   for (const name of Object.keys(fields)) {
     if (name === 'id' || !NAME.test(name)) {
       fail(
@@ -423,19 +372,10 @@ export function table<F extends Fields>(
   const declared = Object.fromEntries(
     Object.entries(fields).map(([name, definition]) => [name, fieldOf(name, definition)]),
   );
-  if (external === undefined) {
-    const document = Object.keys(declared).find((name) => declared[name]?.type === 'json');
-    if (document !== undefined) {
-      fail(
-        `\`${document}\` is a document, which an external table's store answers alone: what the authority would keep in it is a state's`,
-      );
-    }
-  }
   return Object.freeze({
     fields: Object.freeze(declared) as F,
     public: Object.freeze(visible),
     unique: uniqueOf(fields, options.unique),
-    ...(external !== undefined && { external }),
   });
 }
 
@@ -466,22 +406,11 @@ export function checkValue(definition: FieldDefinition, value: unknown): string 
         ? `The value is not between ${String(definition.min)} and ${String(definition.max)}.`
         : undefined;
     }
-    case 'json': {
-      return isJson(value) ? undefined : 'The value is not JSON.';
-    }
   }
 }
 
-/**
- * What a field of a table the authority keeps holds where a record keeps nothing: its default — no
- * document's, which such a table declares none of (`table()`).
- */
+/** What a field of a table the authority keeps holds where a record keeps nothing: its default. */
 export function defaultOf(definition: FieldDefinition): Value {
-  if (definition.type === 'json') {
-    throw new TypeError(
-      "A document is an external table's field, whose records the authority never keeps.",
-    );
-  }
   return definition.default;
 }
 
@@ -621,6 +550,21 @@ function checkSeedUnique(
 }
 
 /**
+ * A table of the database as the authority keeps its declaration: a follow's as the follow made it,
+ * frozen; any other as `table()` declares it, should it be written by hand or changed since — of
+ * no store and no row a state binds, which are a follow's table's alone.
+ */
+function declaredOf(name: string, definition: Table): Table {
+  if (isFollowedTable(definition)) {
+    return definition;
+  }
+  if (definition.external !== undefined) {
+    notFollowed(`the table \`${name}\` names a store, which no follow declared it of`);
+  }
+  return table(definition.fields, { public: definition.public, unique: definition.unique });
+}
+
+/**
  * The application's database: its tables and the records the authority starts with. What it
  * answers is read inside the authority alone, while it evaluates the application's code; the
  * authority is given the database itself, and reads the declaration from it.
@@ -637,14 +581,7 @@ export function database<T extends Tables>(
         `\`${name}\` is not a table's name: a letter, then letters, digits or _, and neither \`session\` nor \`transaction\``,
       );
     }
-    // Declared again as `table()` declares it, should it be written by hand or changed since.
-    const checked = table(definition.fields, {
-      external: definition.external,
-      public: definition.public,
-      unique: definition.unique,
-    });
-    const { rows } = definition;
-    const declared = rows === undefined ? checked : Object.freeze({ ...checked, rows });
+    const declared = declaredOf(name, definition);
     definitions.set(name, declared);
     handles[name] = handle(name, declared);
   }

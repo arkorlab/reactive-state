@@ -7,7 +7,7 @@ import type { SqliteKeyColumn } from './keys.ts';
  * The change log of a Drizzle schema's tables in SQLite — D1's — as their triggers write it: the
  * log of `changeLogSql`, `_rs_changes`, a row of each row a statement changed, of the table as the
  * schema declares it, holding the text of the row's keys before the change and after it, which
- * renders again what read rows of those values (`d1Store`'s reading of the log). A table of no keys
+ * renders again what read rows of those values (`store.ts`'s reading of the log). A table of no keys
  * logs each change of the table alone. A statement of `REPLACE` deletes the rows its new row would
  * take the place of, with no trigger of the delete — SQLite's own, where `recursive_triggers` is
  * off — so before an insert or an update, each row its new values meet on a unique column set, or

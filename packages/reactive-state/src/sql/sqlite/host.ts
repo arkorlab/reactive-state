@@ -1,4 +1,6 @@
 import type { DatabaseHost } from '../../authority/database-host.ts';
+import type { ExternalStore } from '../../authority/external.ts';
+import { ownInternals } from '../follow-internals.ts';
 import { d1Hosted } from './d1-host.ts';
 import type { DrizzleD1Follow } from './follow.ts';
 import type { LocalD1 } from './local-d1.ts';
@@ -28,13 +30,18 @@ async function seedOnce(binding: LocalD1, first: () => Promise<void>): Promise<v
 
 /**
  * The file `D1_FILE` names, or `.data/d1.sqlite`: what the application's Drizzle reads and writes,
- * and what the authority it is given opens as it starts. Its log keeps `keptMs` of changes.
+ * and what the authority it is given opens as it starts, and the store that reads its log through
+ * the file. Its log keeps `keptMs` of changes.
  */
 export async function inSqliteFile<S extends Readonly<Record<string, unknown>>>(
   schema: S,
   follow: DrizzleD1Follow<S>,
   keptMs: number,
-): Promise<{ readonly orm: unknown; readonly host: DatabaseHost }> {
+): Promise<{
+  readonly orm: unknown;
+  readonly host: DatabaseHost;
+  readonly store: () => ExternalStore;
+}> {
   // Of the process that opens the file alone: a bundle of a Worker's may import this module.
   const [{ drizzle }, migrator, { aloneOf, localD1 }] = await Promise.all([
     import('drizzle-orm/d1'),
@@ -58,5 +65,6 @@ export async function inSqliteFile<S extends Readonly<Record<string, unknown>>>(
       seed: (first) => seedOnce(binding, first),
     },
     orm,
+    store: () => ownInternals(follow).storeOf(binding),
   };
 }

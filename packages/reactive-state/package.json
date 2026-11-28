@@ -25,7 +25,6 @@
       "default": "./src/sql/db.ts"
     },
     "./drizzle": "./src/sql/index.ts",
-    "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",
     "./next": "./src/next/index.ts",
     "./next/adapter": "./src/next/adapter.ts",

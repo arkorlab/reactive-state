@@ -107,8 +107,8 @@ export class Call {
     this.#stillOpen();
     try {
       const answered = read();
-      // An external table's store answers in time: what it fails with is the call's fault as well,
-      // and an answer that comes after the call settled is none.
+      // A read that answers in time — of the application's SQL, a row's: what it fails with is the
+      // call's fault as well, and an answer that comes after the call settled is none.
       return answered instanceof Promise ? (this.#awaited(answered) as T) : answered;
     } catch (error) {
       if (!isAuthorityError(error)) {

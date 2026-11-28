@@ -100,7 +100,7 @@ async function started(
   host: DatabaseHost | undefined,
 ): Promise<Authority> {
   const { buildId, clock, database, middleware, operations, port, programs, routes } = options;
-  const { externalPollMs, onError, sessions, shareViews, stores, testMode, timeoutMs } = options;
+  const { externalPollMs, onError, sessions, shareViews, testMode, timeoutMs } = options;
   const engine = new Engine({
     database,
     programs,
@@ -111,7 +111,6 @@ async function started(
     sessions,
     diagnosticsEveryMs: diagnosticsEveryOf(process.env['REACTIVE_DIAGNOSTICS']),
     externalPollMs,
-    stores,
     ...(buildId !== undefined && { buildId }),
     ...(filename !== undefined && { filename }),
     ...(clock !== undefined && { clock }),
@@ -174,8 +173,7 @@ export async function startAuthority(options: AuthorityOptions): Promise<Authori
   if (host === undefined) return started(options, token, filename, host);
   try {
     await host.open();
-    const stores = { ...host.stores(), ...options.stores };
-    return await started({ ...options, stores }, token, filename, host);
+    return await started(options, token, filename, host);
   } catch (error) {
     await host.close();
     throw error;

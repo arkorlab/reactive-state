@@ -5,6 +5,7 @@ import { pgTable, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { followDrizzle } from '../src/sql/index.ts';
+import { followInternals } from './support/follow-store.ts';
 
 /**
  * Who writes a followed table needs no right to its log: the functions the triggers run write it as
@@ -328,9 +329,9 @@ describe('a role that did not make the log', { timeout: TEST_TIMEOUT_MS }, () =>
     await as('app', "INSERT INTO items VALUES ('a', 'x')");
     await pg.exec('SET ROLE reader');
 
-    const read = await follow.store(pg).changes(0, 10);
+    const read = await followInternals(follow).storeOf(pg).changes(0, 10);
     await follow.prune(pg, Date.now() + 60_000);
-    const pruned = await follow.store(pg).changes(0, 10);
+    const pruned = await followInternals(follow).storeOf(pg).changes(0, 10);
 
     expect(read.changes).toHaveLength(1);
     expect(pruned).toMatchObject({ changes: [], floor: 2, head: 1 });

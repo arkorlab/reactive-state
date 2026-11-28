@@ -1,3 +1,4 @@
+import { type DatabaseHost, hostDatabase } from '../authority/database-host.ts';
 import type { ExternalStore } from '../authority/external.ts';
 import { bringStores } from '../authority/followed-stores.ts';
 import {
@@ -7,7 +8,7 @@ import {
   type Table,
   type TableRows,
 } from '../server/schema.ts';
-import { internalsOf } from './follow-internals.ts';
+import { internalsOf, ownInternals, type TablesOfFollow } from './follow-internals.ts';
 import type { DrizzleFollow } from './index.ts';
 import type { DrizzleD1Follow } from './sqlite/follow.ts';
 
@@ -16,9 +17,8 @@ import type { DrizzleD1Follow } from './sqlite/follow.ts';
  * of PostgreSQL's tables or of D1's, one or more: what the compile's `--database` names, declared
  * by `database()`, so that the authority reads it as it reads any. Each follow brings its own
  * store, which the authority makes as it starts of the connection the follow's `client` was last
- * given, and reads the follow's log through: the host gives no `stores`, and a store it gives by the
- * name of a follow's store is read in that one's place. No connection is opened, listened to or
- * pruned here: the host does each, as it opened them.
+ * given, and reads the follow's log through. No connection is opened, listened to or pruned here:
+ * the host does each, as it opened them.
  *
  * ```ts
  * // @/db
@@ -33,7 +33,7 @@ type Follow = DrizzleD1Follow<unknown> | DrizzleFollow<unknown>;
 
 /** The tables of each follow of `F`, as one database declares them all. */
 type TablesOf<F> = F extends readonly [infer First, ...infer Rest]
-  ? (First extends { readonly tables: infer T } ? T : never) & TablesOf<Rest>
+  ? TablesOf<Rest> & TablesOfFollow<First>
   : unknown;
 
 /** How a state binds a row of `T`, a table of a Drizzle schema, which is all such a table answers. */
@@ -48,11 +48,11 @@ type RowsOf<T> = T extends { readonly rows: TableRows<infer C, infer R> }
   : never;
 
 /**
- * The database `followedDb` answers: of each table of the follows' schemas, the row a condition
- * names, and nothing else. The application reads and writes the tables with its Drizzle:
- * `db.<table>.get`, `findMany` and `count` are faults of such a table.
+ * The database `followedDb` answers, and `reactiveDb`: of each table of the follows' schemas, the
+ * row a condition names, and nothing else. The application reads and writes the tables with its
+ * Drizzle: `db.<table>.get`, `findMany` and `count` are faults of such a table.
  */
-type FollowedDatabase<T> = AnyDatabase & {
+export type FollowedDatabase<T> = AnyDatabase & {
   readonly [K in keyof T as T[K] extends { readonly rows: TableRows } ? K : never]: RowsOf<T[K]>;
 };
 
@@ -83,7 +83,7 @@ export function followedDb<F extends readonly [Follow, ...Follow[]]>(
     const internals = internalsOf(follow);
     if (internals === undefined) {
       fail(
-        `argument ${String(index + 1)} is not what \`followDrizzle()\` answered: give each follow itself, not its \`tables\` nor a database`,
+        `argument ${String(index + 1)} is not what \`followDrizzle()\` answered: give each follow itself, not a database`,
       );
     }
     const { storeName } = internals;
@@ -105,4 +105,22 @@ export function followedDb<F extends readonly [Follow, ...Follow[]]>(
   const db = database(tables);
   bringStores(definitionOf(db), stores);
   return db as unknown as FollowedDatabase<TablesOf<F>>;
+}
+
+/**
+ * The database of `follow` that a host holding its own connections gives its authority
+ * (`reactiveDb`): of the follow's tables, of `host`, which opens, listens to and prunes the log,
+ * and of `store`, which reads the log through the connection the host holds for it — not the one
+ * the follow's `client` was given — made as the authority starts.
+ */
+export function hostedDb(
+  follow: unknown,
+  host: DatabaseHost,
+  store: () => ExternalStore,
+): AnyDatabase {
+  const { storeName, tables } = ownInternals(follow);
+  const db = database(tables);
+  hostDatabase(db, host);
+  bringStores(definitionOf(db), new Map([[storeName, store]]));
+  return db;
 }

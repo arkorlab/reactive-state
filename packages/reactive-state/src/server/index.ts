@@ -22,7 +22,6 @@ export {
   type Field,
   type FieldType,
   integer,
-  json,
   MAX_TEXT_LENGTH,
   type Order,
   type Query,

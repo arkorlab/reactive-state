@@ -138,15 +138,6 @@ async function digestOf(text: string): Promise<string> {
   ).join('');
 }
 
-/** What `db.<table>` is answered for a table read by SQL: a fault, which names the way to read it. */
-export function readBySql(table: string): Promise<never> {
-  return Promise.reject(
-    new Error(
-      `${table} is read by SQL: query it with the application's Drizzle, whose plan says what a render read, not through \`db.${table}\`.`,
-    ),
-  );
-}
-
 /** The warning of tables whose triggers are not those `captureSql()` makes, where there are any. */
 function warnUntriggered(untriggered: ReadonlySet<string>): void {
   if (untriggered.size === 0) return;
@@ -220,8 +211,5 @@ export function sqliteStore(binding: D1Binding, followed: FollowedSqliteStore): 
         head: logNumber(first?.['head'] ?? 0, 'head'),
       };
     },
-    count: (table) => readBySql(table.name),
-    find: (table) => readBySql(table.name),
-    get: (table) => readBySql(table.name),
   };
 }

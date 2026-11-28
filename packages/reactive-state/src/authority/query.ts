@@ -1,4 +1,4 @@
-import type { Json, Value } from '../program.ts';
+import type { Value } from '../program.ts';
 import type { Entry } from '../server/context.ts';
 import { checkValue, type FieldDefinition, isRecordId, type Table } from '../server/schema.ts';
 
@@ -7,23 +7,15 @@ import { checkValue, type FieldDefinition, isRecordId, type Table } from '../ser
  * and the one predicate every record is held to — by a read, by a transaction's reads of what it
  * has yet to commit, and by a commit, to tell what it changed of what a render read. Records are
  * filtered here, never in SQL: a Durable Object's SQLite and Node's answer the same, whatever
- * either makes of JSON. An external table's store filters its own records (`external.ts`), as this
- * predicate says, and orders their text by code point, as SQLite does (`ordered`).
+ * either makes of JSON.
  */
 
-/**
- * A record's fields, as the authority reads them against the declaration: every field there — a
- * document (`json()`) of an external table's as JSON, which no query asks of or orders by.
- */
-export type Values = Readonly<Record<string, Json>>;
-
-/** A record of a table the authority keeps: no document, which such a table declares none of. */
+/** A record's fields, as the authority reads them against the declaration: every field there. */
 export type KeptValues = Readonly<Record<string, Value>>;
 
-/** What a record holds of a field a query names: never a document, which none names (`comparable`). */
-export function comparableOf(values: Values, field: string): Value {
-  const value = values[field] ?? false;
-  return typeof value === 'object' ? false : value;
+/** What a record holds of a field a query names: `false` of one it holds none of. */
+export function comparableOf(values: KeptValues, field: string): Value {
+  return values[field] ?? false;
 }
 
 /** What a query asks of a record, checked: each field — `id` among them — equal to its value. */
@@ -43,9 +35,6 @@ export interface Query {
   /** The most records answered, the first in that order; every one where it is `undefined`. */
   readonly limit: number | undefined;
 }
-
-/** A field a query may ask of and order by: any but a document (`json()`). */
-type Comparable = Exclude<FieldDefinition, { readonly type: 'json' }>;
 
 /** A mistake in the application's code — a fault, which nothing it does with it makes a refusal. */
 function fault(what: string, why: string): never {
@@ -67,7 +56,7 @@ function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 /** What JavaScript calls the type of the values a field holds. */
-function typeOf(definition: Comparable): 'boolean' | 'number' | 'string' {
+function typeOf(definition: FieldDefinition): 'boolean' | 'number' | 'string' {
   switch (definition.type) {
     case 'text': {
       return 'string';
@@ -85,14 +74,6 @@ function typeOf(definition: Comparable): 'boolean' | 'number' | 'string' {
 function declared(what: string, table: Table, name: string): FieldDefinition {
   const definition = Object.hasOwn(table.fields, name) ? table.fields[name] : undefined;
   return definition ?? fault(what, `\`${name}\` is none of the table's fields`);
-}
-
-/** The field `name` of the table, which a query asks of or orders by: a fault for a document. */
-function comparable(what: string, table: Table, name: string): Comparable {
-  const definition = declared(what, table, name);
-  return definition.type === 'json'
-    ? fault(what, `\`${name}\` is a document, which no query asks of or orders by`)
-    : definition;
 }
 
 /**
@@ -119,7 +100,7 @@ function whereOf(what: string, table: Table, where: unknown): Where | null {
       conditions[name] = value;
       continue;
     }
-    const definition = comparable(what, table, name);
+    const definition = declared(what, table, name);
     if (typeof value !== typeOf(definition)) {
       return fault(
         what,
@@ -164,7 +145,7 @@ function orderOf(what: string, table: Table, orderBy: unknown): readonly Order[]
       return fault(what, 'each key of `orderBy` names one field, `"asc"` or `"desc"`');
     }
     if (name !== 'id') {
-      comparable(what, table, name);
+      declared(what, table, name);
     }
     return { descending: direction === 'desc', field: name };
   });
@@ -208,69 +189,39 @@ export function queryOf(
 }
 
 /** Whether the record — `id`, holding `values` — is one `where` names. */
-export function matches(where: Where, id: string, values: Values): boolean {
+export function matches(where: Where, id: string, values: KeptValues): boolean {
   return Object.entries(where).every(
     ([name, value]) => (name === 'id' ? id : comparableOf(values, name)) === value,
   );
 }
 
-/**
- * Two values of one field in order: text by its UTF-16 units — or by its code points, as an
- * external table's store orders it (SQLite's `BINARY`, of UTF-8) — numbers, `false` before `true`.
- */
-function compare(a: Value, b: Value, codePoints: boolean): number {
+/** Two values of one field in order: text by its UTF-16 units, numbers, `false` before `true`. */
+function compare(a: Value, b: Value): number {
   if (a === b) {
     return 0;
   }
-  if (codePoints && typeof a === 'string' && typeof b === 'string') {
-    return byCodePoint(a, b);
-  }
   return a < b ? -1 : 1;
-}
-
-/** The last code point UTF-16 writes in one unit: one past it takes a surrogate pair. */
-const UNITS = { lastSingle: 0xff_ff } as const;
-
-/** Two texts by their code points: where UTF-16 puts a surrogate pair before `U+E000`–`U+FFFF`. */
-function byCodePoint(a: string, b: string): number {
-  let at = 0;
-  while (at < a.length && at < b.length) {
-    const x = a.codePointAt(at) ?? 0;
-    const y = b.codePointAt(at) ?? 0;
-    if (x !== y) {
-      return x - y;
-    }
-    at += x > UNITS.lastSingle ? 2 : 1;
-  }
-  return a.length - b.length;
 }
 
 /** One record as a query reads it: its id, and its fields. */
 export interface Found {
   readonly id: string;
-  readonly values: Values;
+  readonly values: KeptValues;
 }
 
-/**
- * The records in the order asked for, each tie broken by the next key, the last one by `id`: text
- * by its code points where `codePoints` says, as an external table's store orders it.
- */
-export function ordered(
-  found: readonly Found[],
-  orderBy: readonly Order[],
-  codePoints = false,
-): readonly Found[] {
+/** The records in the order asked for, each tie broken by the next key, the last one by `id`. */
+export function ordered(found: readonly Found[], orderBy: readonly Order[]): readonly Found[] {
   return found.toSorted((a, b) => {
     for (const { descending, field } of orderBy) {
       const order =
         field === 'id'
-          ? compare(a.id, b.id, codePoints)
-          : compare(comparableOf(a.values, field), comparableOf(b.values, field), codePoints);
+          ? compare(a.id, b.id)
+          : compare(comparableOf(a.values, field), comparableOf(b.values, field));
       if (order !== 0) {
         return descending ? -order : order;
       }
     }
-    return compare(a.id, b.id, codePoints);
+    return compare(a.id, b.id);
   });
 }
 

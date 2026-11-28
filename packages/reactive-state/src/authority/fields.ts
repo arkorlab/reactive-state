@@ -19,7 +19,6 @@ import { digest } from './canonical.ts';
 import type { RowChange } from './dependencies.ts';
 import { denied, isAuthorityError, messageOf, refusal } from './errors.ts';
 import { Call } from './evaluation.ts';
-import { Memo } from './memo.ts';
 import type { Core, Session } from './model.ts';
 import { replayPath } from './replay.ts';
 import { rowChange, writeRow } from './row-writes.ts';
@@ -35,9 +34,9 @@ import { guardedBy, rendererOf } from './views.ts';
  * record, which a write never makes; the value — the one a `set` is sent, or the one an `apply`
  * computes from what the field holds and the values the call captured — checked against the field
  * and each `unique` group the field is of; and the record, the operation's receipt and the change
- * log, committed together. Of a row of the application's tables (`row-writes.ts`), the path is
- * rendered again from nothing the memo holds, the row is written first, through the application's
- * connection, and the receipt then commits with what the row's readers read of it.
+ * log, committed together. Of a row of the application's tables (`row-writes.ts`), the row is
+ * written first, through the application's connection, and the receipt then commits with what the
+ * row's readers read of it.
  */
 
 /** A thrown value's message, for a refusal that quotes it: never longer than this. */
@@ -111,11 +110,7 @@ async function replayed(
     if ((await guardedBy(core, renderer, claims.root)).refused) {
       throw denied();
     }
-    // What the memo holds of a table of the application's is as fresh as its log's last read: a
-    // membership the log has not told of the end of would pass. Each component runs now instead.
-    const external = core.tables.store(claims.table) !== undefined;
-    const walking = external ? { ...renderer, memo: new Memo(core.clock) } : renderer;
-    const outcome = await replayPath(walking, claims);
+    const outcome = await replayPath(renderer, claims);
     if (call.fault !== undefined) {
       throw call.fault.error;
     }

@@ -1,7 +1,7 @@
 import type { ExternalChanges, ExternalStore } from '../../authority/external.ts';
 import { tableReads } from '../../server/context.ts';
 import type { D1Binding } from './client.ts';
-import { type FollowedSqliteStore, readBySql, sqliteStore } from './store.ts';
+import { type FollowedSqliteStore, sqliteStore } from './store.ts';
 
 /**
  * A D1 binding of a function that answers the binding of now, or none: what a follow is given where
@@ -143,9 +143,6 @@ function lateStore(current: BindingOfNow, followed: FollowedSqliteStore): Extern
       if (last?.binding !== binding) last = { binding, store: sqliteStore(binding, followed) };
       return last.store.changes(since, limit);
     },
-    count: (table) => readBySql(table.name),
-    find: (table) => readBySql(table.name),
-    get: (table) => readBySql(table.name),
   };
 }
 

@@ -44,18 +44,12 @@ export interface Evaluation {
    * that nothing tracks (`./untracked.ts`); none for any other.
    */
   readonly shared?: { readonly boundToRequest: (what: string) => void } | undefined;
-  /**
-   * The record of `table` with that id, or `null`: an id no record could have names none. An
-   * external table's store answers it in time (`external.ts`).
-   */
-  readonly get: (table: string, id: unknown) => Entry | null | Promise<Entry | null>;
+  /** The record of `table` with that id, or `null`: an id no record could have names none. */
+  readonly get: (table: string, id: unknown) => Entry | null;
   /** The records of `table` a query names (`{ where, select?, orderBy?, limit? }`), in its order. */
-  readonly findMany: (
-    table: string,
-    query: unknown,
-  ) => readonly Entry[] | Promise<readonly Entry[]>;
+  readonly findMany: (table: string, query: unknown) => readonly Entry[];
   /** How many records of `table` a query names (`{ where }`). */
-  readonly count: (table: string, query: unknown) => number | Promise<number>;
+  readonly count: (table: string, query: unknown) => number;
   /** Makes a record, in the operation's transaction: it answers the record, its id the authority's. */
   readonly insert: (table: string, fields: unknown) => Entry;
   /** Changes fields of a record there is, in the operation's transaction. */

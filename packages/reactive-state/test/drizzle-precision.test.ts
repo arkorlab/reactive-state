@@ -2180,7 +2180,7 @@ describe(
 
     it('prunes the log where a publication of all tables publishes its deletes', async () => {
       const setup = await opened();
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       const counted = async (log: 'changes' | 'ddl') => {
         const { rows } = await setup.pg.query<{ n: string }>(
           `SELECT count(*)::text AS n FROM reactive_state.${log}`,

@@ -16,21 +16,4 @@ export {
   type AuthorityStats,
 } from './object.ts';
 export type { AuthorityEnv } from './env.ts';
-export {
-  changeCaptureSql,
-  d1Executor,
-  type D1Executor,
-  d1Store,
-  type D1Table,
-  type D1Tables,
-  pruneChanges,
-} from './d1-store.ts';
-export type {
-  ExternalChange,
-  ExternalChanges,
-  ExternalQuery,
-  ExternalRecord,
-  ExternalStore,
-  ExternalStores,
-  ExternalTable,
-} from '../authority/external.ts';
+export { d1Executor, type D1Executor, pruneChanges } from './d1-store.ts';

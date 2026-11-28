@@ -268,6 +268,20 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     await expect(store.changes(0, 10)).resolves.toMatchObject({ head: before.head });
   });
 
+  it('names `follow.captureSql()` of a log whose head holds no row', async () => {
+    const setup = await opened();
+    const store = ownStore(setup.follow);
+    await setup.pg.query('DELETE FROM reactive_state.head');
+
+    await expect(store.changes(0, 10)).rejects.toThrow(
+      'The change log has no head: run the statements of `follow.captureSql()` before following it.',
+    );
+
+    for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+
+    await expect(store.changes(0, 10)).resolves.toMatchObject({ floor: expect.any(Number) });
+  });
+
   it('explains how to upgrade a log missing its schema-fold function', async () => {
     const setup = await opened();
     await setup.pg.query('DROP FUNCTION reactive_state.fold_ddl(double precision)');

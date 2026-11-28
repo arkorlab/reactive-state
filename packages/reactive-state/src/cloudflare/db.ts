@@ -3,9 +3,11 @@ import { env } from 'cloudflare:workers';
 // file of it, which a deployment's audit refuses as a module no runtime provides.
 import { drizzle } from 'drizzle-orm/d1';
 
-import { type DatabaseHost, hostDatabase, hostOf, LOG } from '../authority/database-host.ts';
-import { type AnyDatabase, database } from '../server/schema.ts';
+import { type DatabaseHost, hostOf, LOG } from '../authority/database-host.ts';
+import type { AnyDatabase } from '../server/schema.ts';
 import type { ReactiveDb, ReactiveDbOptions } from '../sql/db.ts';
+import { ownInternals } from '../sql/follow-internals.ts';
+import { hostedDb } from '../sql/followed.ts';
 import { followDrizzle } from '../sql/index.ts';
 import { boundD1 } from '../sql/sqlite/bound-d1.ts';
 import { d1Hosted } from '../sql/sqlite/d1-host.ts';
@@ -49,7 +51,6 @@ export async function reactiveDb<S extends Readonly<Record<string, unknown>>>(
   }
   const d1 = follow;
   const binding = boundD1(env as unknown as Readonly<Record<string, unknown>>, name);
-  const db = database(d1.tables);
   const host: DatabaseHost = {
     ...d1Hosted(binding, d1, LOG.keptMs),
     alone: (work) => work(),
@@ -58,7 +59,7 @@ export async function reactiveDb<S extends Readonly<Record<string, unknown>>>(
     migrate: () => notInAWorker('migration'),
     seed: () => notInAWorker('seed'),
   };
-  hostDatabase(db, host);
+  const db = hostedDb(d1, host, () => ownInternals(d1).storeOf(binding));
   // A write answers its own changes, not the rows the log's triggers wrote beside them.
   const orm = drizzle(d1.client(ownChanges(binding)) as never, { schema });
   return { db, orm } as unknown as ReactiveDb<S>;
