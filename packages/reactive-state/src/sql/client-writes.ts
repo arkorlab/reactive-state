@@ -100,7 +100,7 @@ function soleStatement(sql: string): boolean {
 }
 
 /** Whether `sql` is one statement that rolls a transaction back, however its strings are read. */
-function undoes(sql: string): boolean {
+export function undoes(sql: string): boolean {
   return UNDOES.test(sql) && soleStatement(sql);
 }
 
@@ -140,7 +140,9 @@ export class TransactionWrites {
       this.ended('landed');
       return value;
     } catch (error) {
-      this.ended(rolledBack(error) || refusedByPostgres(error) ? 'none' : 'unknown');
+      // What went before an end the client did not read may have landed, whatever this error says.
+      const unwritten = rolledBack(error) || refusedByPostgres(error);
+      this.ended(unwritten && !this.#unseen ? 'none' : 'unknown');
       throw error;
     }
   }
@@ -179,7 +181,7 @@ export class TransactionWrites {
   /**
    * `settled`, which ends the transaction — its `COMMIT`, or a call that runs it whole — as it
    * ends its writes: landed as it answers, none where `rolledBack` says its error rolled it back or
-   * PostgreSQL refused it, of an outcome unknown otherwise.
+   * PostgreSQL refused it, of an outcome unknown otherwise, and where it ended unseen before.
    */
   through(settled: unknown, rolledBack: (error: unknown) => boolean): unknown {
     if (!(settled instanceof Promise)) {
