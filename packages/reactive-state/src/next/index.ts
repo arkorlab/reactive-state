@@ -37,6 +37,7 @@ export { authority, requestSession, routeSession, type SessionSource } from './a
 export { endSession, sessionKey } from './server-calls.ts';
 export { type AuthorityRefusal, authorityRefusal } from './refusals.ts';
 export { operate, OperationError } from './operate.ts';
+export { type OperationRefusal, operationRefusal } from '../runtime/outcome.ts';
 export type { Elements } from './render.ts';
 
 /** Where a root's event stream is read from: the route a compile writes (`./next/route`). */

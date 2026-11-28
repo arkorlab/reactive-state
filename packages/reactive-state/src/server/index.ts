@@ -38,6 +38,7 @@ export {
   type Writable,
 } from './schema.ts';
 export type { FieldRef, Json, User, Value } from '../program.ts';
+export { refuse } from './refuse.ts';
 
 /**
  * The session's user, as the authority signed it in; the authority's own refusal (401) when the

@@ -13,6 +13,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { Engine } from '../src/authority/node-engine.ts';
 import { type OperationCall, PROTOCOL_VERSION } from '../src/program.ts';
+import { refuse } from '../src/server/index.ts';
 import { database, table, text as field } from '../src/server/schema.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { engineOf, openedWith } from './support/drizzle.ts';
@@ -196,6 +197,31 @@ describe(
       expect(again).toMatchObject({ code: 'OPERATION_REJECTED', status: 422 });
       expect(runs).toBe(1);
       await expect(heldIds(setup.pg)).resolves.toStrictEqual(['t1']);
+    });
+
+    it('answers the application’s own refusal as it is before a write, and as a failure after one', async () => {
+      const setup = await openedWith(schema, DDL);
+      const { engine, session } = await withOperations(setup, {
+        after: async (): Promise<void> => {
+          await setup.orm.insert(tasks).values({ id: 't2', title: 'Written' });
+          refuse('NO_ROOM');
+        },
+        before: async (): Promise<void> => {
+          await setup.orm.select().from(tasks).where(eq(tasks.id, 't1'));
+          refuse('NO_ROOM', 'The project has no room.');
+        },
+      });
+
+      const before = await rejection(engine.operate(session, callOf('before')));
+      const after = await rejection(engine.operate(session, callOf('after')));
+
+      expect(before).toMatchObject({
+        code: 'NO_ROOM',
+        message: 'The project has no room.',
+        status: 422,
+      });
+      expect(after).toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+      expect((after as Error).message).toContain('NO_ROOM');
     });
 
     it('answers the refusal of an operation that read and then threw', async () => {

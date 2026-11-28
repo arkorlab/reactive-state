@@ -25,7 +25,7 @@ import {
   SESSION_COOKIE,
   VIEW_LIMITS,
 } from '../src/program.ts';
-import { operationOutcome } from '../src/react/index.tsx';
+import { operationOutcome, operationRefusal } from '../src/react/index.tsx';
 import { LiveRoot } from '../src/react/live-root.tsx';
 import type { ClientPartProps } from '../src/react/state.ts';
 import { BUILD, frameAt, projectTree, refusal } from './support/page.ts';
@@ -602,6 +602,27 @@ describe('the server runtime', () => {
       });
       expect(hoisted.client['operate']).toHaveBeenCalledTimes(1);
       expect(hoisted.refresh).not.toHaveBeenCalled();
+    });
+
+    it('says the code a refused operation was refused with, the application’s own and the session’s, through the digest alone', async () => {
+      hoisted.client['operate']
+        ?.mockResolvedValueOnce(refusal(422, 'ALREADY_MEMBER', 'Already a member of the team.'))
+        .mockResolvedValueOnce(refusal(401, 'UNAUTHENTICATED', 'Sign in first.'))
+        .mockResolvedValueOnce(refusal(503, 'AUTHORITY_UNAVAILABLE', 'Not reachable.'));
+
+      const member = await masked(operate('actions/todos', 'completeProject', ['p1'], BUILD));
+      const ended = await masked(operate('actions/todos', 'completeProject', ['p1'], BUILD));
+      vi.useFakeTimers();
+      const unknown = operate('actions/todos', 'completeProject', ['p1'], BUILD);
+      hoisted.client['operate']?.mockResolvedValue(
+        refusal(503, 'AUTHORITY_UNAVAILABLE', 'Not reachable.'),
+      );
+      const reading = masked(unknown);
+      await vi.runAllTimersAsync();
+
+      expect(operationRefusal(member)).toStrictEqual({ code: 'ALREADY_MEMBER' });
+      expect(operationRefusal(ended)).toStrictEqual({ code: 'UNAUTHENTICATED' });
+      expect(operationRefusal(await reading)).toBeUndefined();
     });
 
     it('refuses a file, more fields than a form may hold, and arguments JSON would not carry', async () => {
