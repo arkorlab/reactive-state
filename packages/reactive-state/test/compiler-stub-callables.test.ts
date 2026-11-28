@@ -310,10 +310,11 @@ describe('written operation overloads and generic calls', () => {
       {
         id: 'actions/callables',
         fileName: 'actions/callables.ts',
-        written: "'./source'",
+        specifierFrom: () => "'./source'",
         exports: operationExports(module),
         callables: operationCallables(module),
       },
+      'actions/callables.ts',
       'b_BUILD',
     );
 
@@ -329,10 +330,11 @@ describe('written operation overloads and generic calls', () => {
       {
         id: 'actions/generic',
         fileName: 'actions/generic.ts',
-        written: "'./source'",
+        specifierFrom: () => "'./source'",
         exports: ['identity'],
         callables: operationCallables(module),
       },
+      'actions/generic.ts',
       'b_BUILD',
     );
 

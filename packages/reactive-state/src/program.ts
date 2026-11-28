@@ -146,8 +146,9 @@ export interface ComponentRef {
 }
 
 /**
- * A server operation — an export of a `'use server'` module a component imports — and the
- * arguments bound to it, as `<form action={deleteTodo.bind(null, projectId, id)}>` renders it.
+ * A server operation — an export of a `'use server'` module the authority registers: one a
+ * component or a hook imports, or one whose file is named `*.operations.ts` — and the arguments
+ * bound to it, as `<form action={deleteTodo.bind(null, projectId, id)}>` renders it.
  * The host binds the operation's own Server Function to the same arguments.
  */
 export interface ActionRef {

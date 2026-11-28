@@ -236,6 +236,7 @@ export function emitStubs(
       stub,
       emitStub(
         operation,
+        stub,
         app.buildId,
         named
           ? {

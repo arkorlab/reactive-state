@@ -14,7 +14,8 @@ import { compileApp, writeOutputs } from './index.ts';
  *     [--no-share] [--check]
  *
  * compiles every component under `<srcDir>` first, in memory, with the custom hooks, the
- * `'use server'` modules and the shared modules it reaches, and reports each refusal; only when it
+ * `'use server'` modules and the shared modules it reaches — and each `'use server'` module there
+ * named `*.operations.ts`, which nothing need import — and reports each refusal; only when it
  * refuses nothing does it write the build into `<dir>`, and the route into `<appDir>` — or, with
  * `--check`, write nothing and exit 1 when any of it is not what a compile would write now.
  * `--session` names how the application reads its own signed-in session, where it signs its users in

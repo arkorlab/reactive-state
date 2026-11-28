@@ -594,10 +594,10 @@ export const updaters = Object.freeze({});
       "import * as program$components$project from './components/project.authority.mts';",
     );
     expect(registry).toContain(
-      "import * as operations$actions$todos from '@/actions/todos';\nimport { db } from '@/db';",
+      "import * as operations$actions$todos from '@/actions/todos';\nimport { db as database$ } from '@/db';",
     );
     expect(registry).toContain(
-      'export const operations = { "actions/publication": operations$actions$publication, "actions/todos": operations$actions$todos };\nexport const database = db;',
+      'export const operations = { "actions/publication": operations$actions$publication, "actions/todos": operations$actions$todos };\nexport const database = database$;',
     );
     expect(read('actions/todos.ts')).toContain(
       [

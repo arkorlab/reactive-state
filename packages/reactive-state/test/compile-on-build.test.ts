@@ -71,6 +71,15 @@ const GREETED = [
 const SHARED_GREETED = GREETED.replace('@/.generated/greeting', '@shared/greeting');
 /** What the compiler refuses: a component file without its component. */
 const NO_COMPONENT = 'export const notAComponent = 1;\n';
+/** A module of server operations nothing imports, which the compile registers by its name. */
+const AUDIT = [
+  "'use server';",
+  '',
+  'export async function auditProject(projectId: string): Promise<string> {',
+  '  return projectId;',
+  '}',
+  '',
+].join('\n');
 /** Long enough for a compile that waits on another's lock to be seen waiting. */
 const HELD_MS = 300;
 const MS_PER_SECOND = 1000;
@@ -174,6 +183,20 @@ describe('compileProject', () => {
       readFileSync(path.join(dir, '.reactive/components/hello.authority.mts'), 'utf8'),
     ).toContain('Hi,');
     expect(outside).toMatchObject({ changed: false, compiled: true });
+  });
+
+  it('writes the stub of a module of server operations added since, which nothing imports, by its name', async () => {
+    const dir = application();
+    await compileProject({ projectDir: dir });
+
+    mkdirSync(path.join(dir, 'src/actions'));
+    writeFileSync(path.join(dir, 'src/actions/audit.operations.ts'), AUDIT);
+    const added = await compileProject({ projectDir: dir });
+
+    expect(added).toMatchObject({ changed: true, compiled: true });
+    expect(readFileSync(path.join(dir, '.reactive/actions/audit.operations.ts'), 'utf8')).toContain(
+      'operate("actions/audit.operations", "auditProject", args, ',
+    );
   });
 
   it('compiles again where a page is added under a folder out of the application the app directory links to, and walks a link back to a folder along the way no further', async () => {

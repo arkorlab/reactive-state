@@ -37,13 +37,11 @@ import { emitRoutesModule, middlewareOutputs, ROUTES_MODULE } from './emit-route
 import { ReactiveCompileError } from './errors.ts';
 import { type HookModule, HookModules } from './hooks.ts';
 import { emitStubs, hostOf, rootPrefetch, rootRemote } from './host.ts';
-import type { ImportedModule } from './imports.ts';
 import type { Manifest } from './manifest.ts';
 import { rememberModuleResolutions } from './module-resolutions.ts';
-import { COMPONENT_SUFFIX, type ModuleClass, Modules } from './modules.ts';
+import { COMPONENT_SUFFIX, type ModuleClass, Modules, OPERATIONS_SUFFIX } from './modules.ts';
 import { checkNodeArguments } from './node-arguments.ts';
-import { operationCallables } from './operation-callables.ts';
-import { type OperationModule, operationExports } from './operations.ts';
+import { operationModules } from './operation-modules.ts';
 import { NO_ROUTING, scanRouting } from './routes.ts';
 import { byCodeUnits } from './splice.ts';
 import { typeNames } from './type-names.ts';
@@ -58,7 +56,8 @@ export { openTypeScript } from './typescript.ts';
  * The compiler of an application's `.reactive.tsx` components — the documented subset, and nothing
  * it cannot carry over whole (packages/reactive-state/README.md). Every component under the source
  * directory is compiled, with the custom hooks, the `'use server'` modules and the shared modules it
- * reaches, into one build:
+ * reaches — and each `'use server'` module there named `*.operations.ts`, which nothing need import
+ * — into one build:
  *
  * - `<id>.authority.mts`, the authority's program of each component: its server part, as the
  *   application wrote it, its JSX rendered as data, and for one with state, its client part;
@@ -208,12 +207,26 @@ function compileWith(api: API, options: CompileOptions): Compiled {
       throw error;
     }
   };
-  const components = componentFiles(srcDir, outDir).flatMap((file) => {
+  // The walk goes by real paths, and so skips what the compile writes by its real path: each stub
+  // it writes of a module named as one of operations is a `'use server'` module of that name too.
+  const named = namedFiles(srcDir, realDirectory(options.outDir));
+  const components = named.components.flatMap((file) => {
     const compiled = attempt(() => compileComponent(file, { hooks, modules }));
     return compiled === undefined ? [] : [compiled];
   });
   checkNodeArguments(components, attempt);
-  const operations = operationModules(components, hooks.all(), modules, attempt);
+  // A module nothing imports is imported by its path from the outputs, each by its real path: a
+  // link in `outDir` or in `srcDir`, as it was given, leads where Node loads the module from.
+  const operations = operationModules(
+    {
+      components,
+      hooks: hooks.all(),
+      named: named.operations,
+      srcDir: path.resolve(options.srcDir),
+    },
+    modules,
+    attempt,
+  );
   const database = namedOf(options.database ?? DEFAULT_DATABASE);
   const exported = database === undefined ? undefined : resolvedDatabase(database, modules, outDir);
   // The pages, the layouts and the route middleware it reads are the build's as much as a
@@ -313,14 +326,28 @@ function byPath(a: readonly string[], b: readonly string[]): number {
   return byCodeUnits(a[0] ?? '', b[0] ?? '');
 }
 
-/** Whether a directory or a file is no component of the application's: packages, and what is hidden. */
+/** Whether a directory or a file holds nothing the compile finds by name: packages, mocks, what is hidden. */
 function isHidden(name: string): boolean {
-  return name === 'node_modules' || name.startsWith('.');
+  // A test runner's manual mocks bear the names of the modules they stand in for, and are none of
+  // the application's: a mock of a module of server operations would be registered, or refused.
+  return name === 'node_modules' || name === '__mocks__' || name.startsWith('.');
 }
 
-/** Every component under `srcDir`, in a stable order: no package's, none of what the compile wrote. */
-function componentFiles(srcDir: string, outDir: string): readonly string[] {
-  const found: string[] = [];
+/** The files the compile finds by their names under its source directory, in a stable order. */
+interface NamedFiles {
+  /** Each component (`COMPONENT_SUFFIX`). */
+  readonly components: readonly string[];
+  /** Each module of server operations (`OPERATIONS_SUFFIX`), which nothing need import. */
+  readonly operations: readonly string[];
+}
+
+/**
+ * Every component and every module named as one of server operations under `srcDir`: no package's,
+ * none of a hidden directory's or of what the compile wrote, and none through a link.
+ */
+function namedFiles(srcDir: string, outDir: string): NamedFiles {
+  const components: string[] = [];
+  const operations: string[] = [];
   const visit = (directory: string): void => {
     const entries = readdirSync(directory, { withFileTypes: true });
     for (const entry of entries) {
@@ -331,42 +358,17 @@ function componentFiles(srcDir: string, outDir: string): readonly string[] {
       if (entry.isDirectory()) {
         visit(full);
       } else if (entry.isFile() && entry.name.endsWith(COMPONENT_SUFFIX)) {
-        found.push(full);
+        components.push(full);
+      } else if (entry.isFile() && entry.name.endsWith(OPERATIONS_SUFFIX)) {
+        operations.push(full);
       }
     }
   };
   visit(srcDir);
-  return found.toSorted(byCodeUnits);
-}
-
-/** The `'use server'` modules the components and the hooks import, each read once. */
-function operationModules(
-  components: readonly CompiledComponent[],
-  hookModules: readonly HookModule[],
-  modules: Modules,
-  attempt: <T>(run: () => T) => T | undefined,
-): readonly OperationModule[] {
-  const found = new Map<string, OperationModule>();
-  const imported: ImportedModule[] = [
-    ...components.flatMap(({ component }) => component.modules),
-    ...hookModules.flatMap((module) => module.modules),
-  ];
-  for (const module of imported) {
-    const { file, id, kind } = module.target;
-    if (file === undefined || kind !== 'operations' || found.has(file)) {
-      continue;
-    }
-    const parsed = modules.parse(file, false);
-    const described = attempt(() => {
-      const exports = operationExports(parsed);
-      const callables = operationCallables(parsed);
-      return { callables, exports };
-    });
-    if (id !== undefined && described !== undefined) {
-      found.set(file, { ...described, fileName: parsed.name, id, written: module.written });
-    }
-  }
-  return [...found.values()].toSorted((a, b) => byCodeUnits(a.id, b.id));
+  return {
+    components: components.toSorted(byCodeUnits),
+    operations: operations.toSorted(byCodeUnits),
+  };
 }
 
 /**
@@ -484,7 +486,8 @@ function emitAll(emitting: Emitting): Map<string, string> {
     path.join(outDir, 'server-functions.ts'),
     emitServerFunctions(session !== undefined, app.host?.prefetchCache === 'remote'),
   );
-  put(path.join(outDir, 'authority.mts'), emitRegistry(app));
+  const registry = path.join(outDir, 'authority.mts');
+  put(registry, emitRegistry(app, registry));
   put(path.join(outDir, DURABLE_OBJECT_MODULE), emitDurableObject());
   const routing = app.routing ?? NO_ROUTING;
   // Held against every output before them, and nothing against them: both of two routes that differ

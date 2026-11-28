@@ -86,6 +86,12 @@ export interface ModuleClass {
 /** The suffix a component's file carries, which its id is named without. */
 export const COMPONENT_SUFFIX = '.reactive.tsx';
 
+/**
+ * The suffix of a `'use server'` module's file the authority registers though nothing imports it,
+ * which its id keeps: only its extension is left out, as any module's (`members.operations`).
+ */
+export const OPERATIONS_SUFFIX = '.operations.ts';
+
 /** The module the intrinsic is imported from, which no output imports. */
 export const FRAMEWORK = 'framework/react';
 

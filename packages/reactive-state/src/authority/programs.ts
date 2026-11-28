@@ -26,7 +26,10 @@ export interface Registry {
   readonly buildId: string;
   /** Each component's program, by its id. */
   readonly programs: ReadonlyMap<string, ComponentProgram>;
-  /** Each `'use server'` module a component imports, by its id. */
+  /**
+   * Each `'use server'` module a component or a hook imports, or whose file is named
+   * `*.operations.ts`, by its id.
+   */
   readonly operations: ReadonlyMap<string, OperationModule>;
 }
 

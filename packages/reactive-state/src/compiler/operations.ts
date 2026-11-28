@@ -16,15 +16,20 @@ import type { OperationCallable } from './operation-callables.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /**
- * A `'use server'` module a component, or a hook, imports: the authority runs it as an operation
- * module, as the application wrote it, and the host calls each of its functions through a stub of
- * the same name (`actions/…`), which asks the authority to run it.
+ * A `'use server'` module a component, or a hook, imports, or one whose file is named
+ * `*.operations.ts` though nothing imports it: the authority runs it as an operation module, as the
+ * application wrote it, and the host calls each of its functions through a stub of the same name
+ * (`actions/…`), which asks the authority to run it.
  */
 export interface OperationModule {
   /** Its id: its path in the source directory, without its extension. */
   readonly id: string;
-  /** How the authority's registry imports it: as the first component that imports it writes it. */
-  readonly written: string;
+  /**
+   * How the output at `output` — the authority's registry, the module's stub — imports it: as the
+   * first component or hook that imports it writes it, whatever the output; one nothing imports, by
+   * its path from the output's directory, with its extension.
+   */
+  readonly specifierFrom: (output: string) => string;
   readonly fileName: string;
   /** The names of the functions it exports, in the order it declares them. */
   readonly exports: readonly string[];
