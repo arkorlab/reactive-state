@@ -1,4 +1,5 @@
 import { type Expression, type Node, isVariableStatement } from 'typescript/ast';
+import type { API } from 'typescript/sync';
 import { describe, expect, it } from 'vitest';
 
 import { flattenedArrayViews } from '../src/compiler/framed-array-flatten.ts';
@@ -21,15 +22,16 @@ function receiverOf(sourceFile: Node, source: string): Expression {
   return initializer;
 }
 
+/** The views of a flat of `source`'s receiver, read in the compiler `api` the test opened once. */
 function views(
+  api: API,
   source: string,
   depth: number | undefined,
-  index?: number,
-  stable = true,
+  at: { readonly index?: number | undefined; readonly stable?: boolean | undefined } = {},
 ): readonly string[] {
-  using api = openTypeScript();
   using parsed = parseModule(api, 'flat-depth.ts', source);
   const receiver = receiverOf(parsed.sourceFile, source);
+  const { index, stable = true } = at;
   return flattenedArrayViews(receiver, index, depth, context(parsed.sourceFile, stable)).map(
     (view) => view.value.getText(parsed.sourceFile),
   );
@@ -52,12 +54,18 @@ const nested = (layers: number): string =>
 
 describe('flat depths an unresolved argument may supply, by written nesting', () => {
   it.each([100, 200])('keeps a linear number of views for %i sibling arrays', (count) => {
-    expect(views(siblings(count), undefined).length).toBeLessThanOrEqual(4 * count);
-    expect(views(aliasedSiblings(count), undefined).length).toBeLessThanOrEqual(4 * count);
+    using api = openTypeScript();
+
+    expect(views(api, siblings(count), undefined).length).toBeLessThanOrEqual(4 * count);
+    expect(views(api, aliasedSiblings(count), undefined).length).toBeLessThanOrEqual(4 * count);
   });
 
   it.each([100, 200])('keeps a linear number of views at a position for %i arrays', (count) => {
-    expect(views(siblings(count), undefined, 0).length).toBeLessThanOrEqual(4 * count);
+    using api = openTypeScript();
+
+    expect(views(api, siblings(count), undefined, { index: 0 }).length).toBeLessThanOrEqual(
+      4 * count,
+    );
   });
 
   const SHAPES: Record<string, string> = {
@@ -82,12 +90,16 @@ describe('flat depths an unresolved argument may supply, by written nesting', ()
   it.each(Object.entries(SHAPES))(
     'reads at an unresolved depth what each uniform depth reads: %s',
     (_, source) => {
+      using api = openTypeScript();
+
       for (const stable of [true, false])
         for (const index of POSITIONS) {
-          const unresolved = new Set(views(source, undefined, index, stable));
+          const unresolved = new Set(views(api, source, undefined, { index, stable }));
           const uniform = new Set<string>();
-          for (let depth = 0; depth <= 9; depth++)
-            for (const each of views(source, depth, index, stable)) uniform.add(each);
+          for (let depth = 0; depth <= 9; depth++) {
+            const read = views(api, source, depth, { index, stable });
+            for (const each of read) uniform.add(each);
+          }
 
           expect(unresolved).toStrictEqual(uniform);
         }

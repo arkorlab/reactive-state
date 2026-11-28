@@ -7,12 +7,14 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
+  isCallExpression,
   isComputedPropertyName,
   isElementAccessExpression,
   isIdentifier,
   isObjectBindingPattern,
   isOmittedExpression,
   isParameterDeclaration,
+  isPropertyAccessExpression,
   isSourceFile,
   isSpreadElement,
   isVariableDeclaration,
@@ -35,6 +37,7 @@ import {
 import { constantKeys, framedKeyNames, TARGET_WRITES } from './framed-key-names.ts';
 import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { framedQuietCallee, framedQuietValue } from './framed-quiet-values.ts';
+import { storedRange, tupleEntry } from './framed-tuple-entries.ts';
 import {
   APPLICATION_WORK,
   callWorkExposure,
@@ -43,7 +46,6 @@ import {
   tupleBindingExposure,
 } from './framed-tuple-work.ts';
 import { framedPossibleBranch, repeatedBodyRead, repeatedFrameRead } from './framed-writes.ts';
-import { constantValue } from './numbers.ts';
 
 export { framedKeyNames } from './framed-key-names.ts';
 
@@ -163,8 +165,9 @@ function argumentPrefix(
 
 /**
  * What is written past the place a prefix ends at: each argument still `pending` there, and what
- * the array of a later spread was written with — the rest of an exposed array first. A spread among
- * them that the compile cannot read supplies nothing it can name, and a hole writes nothing. What a
+ * the array of a later spread was written with — the rest of an exposed array first — and, of an
+ * exposed one, what was written into any of its entries (`tupleTargetWrites`). A spread among them
+ * that the compile cannot read supplies nothing it can name, and a hole writes nothing. What a
  * spread before them holds comes first, so none of them stands at a known position: an array that
  * several spreads reach adds what it was written with once.
  */
@@ -186,6 +189,7 @@ function writtenPast(
     expanded.add(selected.array);
     const written = selected.array.elements.toReversed();
     for (const node of written) pending.push({ node, seen: selected.seen });
+    if (selected.exposed) past.push(...tupleTargetWrites(selected.seen, call, each.node, 'any'));
   }
   return past;
 }
@@ -372,19 +376,24 @@ function exposedArgumentPrefix(
     unplaced = others;
   }
   for (const node of unplaced.toReversed()) pending.push({ node, seen: selected.seen });
-  const past = writtenPast(call, pending, context.reached);
+  const written = tupleTargetWrites(selected.seen, call, context.spread, 'any');
+  const named = new Set(alternatives);
+  const later = written.filter((node) => !named.has(node));
+  const past = [...later, ...writtenPast(call, pending, context.reached)];
   return endedPrefix({ values, unknown: true, alternatives }, past);
 }
 
 /**
  * A tuple's written first-entry replacements remain possible receivers after its proof is lost:
  * those written before the `spread` that reads it, in the call's own work too, and those a later
- * pass or another owner may run first.
+ * pass or another owner may run first. Where an `'any'` entry is asked, the replacements of each
+ * entry, which stay possible values of the array among what is written past the prefix.
  */
 function tupleTargetWrites(
   aliases: ReadonlySet<FrameBinding>,
   call: CallExpression | NewExpression,
   spread: Node,
+  entries: 'any' | 'first' = 'first',
 ): readonly Expression[] {
   const values: Expression[] = [];
   const owner = executionOwner(call);
@@ -395,9 +404,16 @@ function tupleTargetWrites(
       TARGET_WRITES.has(node.operatorToken.kind) &&
       (node.end <= spread.pos || tupleWriteBefore(node, call, aliases, owner)) &&
       framedPossibleBranch(node) &&
-      firstTupleEntry(node.left, aliases)
+      tupleEntry(node.left, aliases, entries)
     )
       values.push(node.right);
+    if (
+      entries === 'any' &&
+      isCallExpression(node) &&
+      (node.end <= spread.pos || tupleWriteBefore(node, call, aliases, owner)) &&
+      framedPossibleBranch(node)
+    )
+      values.push(...storedEntries(node, aliases));
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -429,15 +445,56 @@ function tupleWriteBefore(
   return false;
 }
 
-/** Only slot zero of the same lexical tuple or resolved constant alias supplies its receiver. */
-function firstTupleEntry(target: Expression, aliases: ReadonlySet<FrameBinding>): boolean {
-  const value = unwrapped(target);
-  if (!isElementAccessExpression(value)) return false;
-  const index = constantValue(value.argumentExpression);
-  if (index !== 0 && index !== '0') return false;
-  const holder = unwrapped(value.expression);
+/**
+ * What a call of `push`, `unshift`, `splice` or `fill` on the same lexical tuple or resolved constant
+ * alias stores in it: each argument it names, past the ones the method takes for other things, read
+ * after the arguments it spreads from a list written in place or a constant's are expanded
+ * (`expandedArguments`). What stands past a spread of a list the compile cannot read is at no known
+ * position, and so may be stored.
+ */
+function storedEntries(
+  call: CallExpression,
+  aliases: ReadonlySet<FrameBinding>,
+): readonly Expression[] {
+  const member = unwrapped(call.expression);
+  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
+  const name = frameMemberName(member);
+  const range = name === undefined ? undefined : storedRange(name);
+  const holder = unwrapped(member.expression);
   const selected = isIdentifier(holder) ? frameBindingOf(holder) : undefined;
-  return selected?.keys.length === 0 && aliases.has(selected.binding);
+  if (range === undefined || selected?.keys.length !== 0 || !aliases.has(selected.binding))
+    return [];
+  const given = expandedArguments(call);
+  return [...given.placed.slice(range[0], range[1]), ...given.unplaced];
+}
+
+/**
+ * The arguments of a call with each spread of a list written in place, or of a constant's, replaced
+ * by its elements: those up to the first spread of a list the compile cannot read, at known
+ * positions, and those past it, at none. The lists are read as written, without asking whether other
+ * code has changed them, which would ask for this call's own writes.
+ */
+function expandedArguments(call: CallExpression): {
+  readonly placed: readonly Expression[];
+  readonly unplaced: readonly Expression[];
+} {
+  const placed: Expression[] = [];
+  const unplaced: Expression[] = [];
+  let open = false;
+  const pending: ArgumentWork[] = [];
+  for (const node of call.arguments) pending.unshift({ node, seen: new Set() });
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (isOmittedExpression(each.node)) continue;
+    if (!isSpreadElement(each.node)) {
+      (open ? unplaced : placed).push(each.node);
+      continue;
+    }
+    const list = argumentArray(each.node.expression, each.seen, call, true);
+    if (list === undefined) open = true;
+    else
+      for (const node of list.array.elements.toReversed()) pending.push({ node, seen: list.seen });
+  }
+  return { placed, unplaced };
 }
 
 /**
