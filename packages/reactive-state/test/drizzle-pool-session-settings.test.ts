@@ -215,3 +215,64 @@ describe('the settings a text changes beyond its transaction', () => {
     expect(leavesSession(statement, true)).toBe(false);
   });
 });
+
+describe('the settings a text changes that the session’s string syntax makes hard to read', () => {
+  // A backslash in a plain string is a letter of it where `standard_conforming_strings` is on, and
+  // may end it where it is off; before a first render asks, it is not known on.
+  it.each([
+    [String.raw`SET application_name = 'a\b'`, false],
+    [String.raw`SELECT set_config('application_name', 'a\b', false)`, false],
+    [String.raw`SET application_name = 'a\b'`, true],
+    [String.raw`SELECT 'a\b'; SET application_name = 'c'`, false],
+    // Unreadable in either syntax: it may change one.
+    [String.raw`SET application_name = 'it\'s'`, false],
+    [String.raw`SET application_name = 'it\'s'`, true],
+    [String.raw`INSERT INTO tasks VALUES ('a', 'it\'s')`, false],
+    ["SELECT E'a'\n'b'", false],
+    ["SELECT 'unfinished", false],
+    ['SELECT /* unfinished', true],
+  ])('is changed by `%s` of a syntax known on: %j', (statement, conforming) => {
+    expect(leavesSession(statement, conforming)).toBe(true);
+  });
+
+  it.each([
+    [String.raw`SELECT 'C:\dir'`, false],
+    [String.raw`INSERT INTO tasks VALUES ('a', 'C:\dir')`, false],
+    [String.raw`SELECT 'a\b'`, true],
+    [String.raw`SET LOCAL application_name = 'a\b'`, false],
+    [String.raw`SELECT set_config('application_name', 'a\b', true)`, false],
+    [String.raw`SELECT E'a\nb'`, false],
+    ["SELECT 'it''s'", false],
+  ])('is not changed by `%s` of a syntax known on: %j', (statement, conforming) => {
+    expect(leavesSession(statement, conforming)).toBe(false);
+  });
+
+  it(
+    'closes a connection given back after a text of a backslash it could not read before a render',
+    async () => {
+      const { pool, tracked } = await pooled();
+      const held = await tracked.connect();
+
+      await held.query(String.raw`SET application_name = 'a\b'`);
+      held.release();
+
+      expect(pool.totalCount).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'gives a connection back as it is after a text of a backslash that changes no setting',
+    async () => {
+      const { pool, tracked } = await pooled();
+      const held = await tracked.connect();
+
+      await held.query(String.raw`SELECT 'C:\dir'`);
+      held.release();
+
+      expect(pool.totalCount).toBe(1);
+      expect(pool.idleCount).toBe(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});

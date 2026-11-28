@@ -73,14 +73,19 @@ function setsForTransaction(tokens: readonly string[], open: number): boolean {
 }
 
 /**
- * Whether SQL changes the settings of the session beyond the transaction it runs in, which stay
- * with the connection after it: any change `changesSession` says but those of `SET LOCAL` and of
- * `set_config(…, true)`, which end with the transaction. A third argument of `set_config` that is
- * not the word `true` is read as a session's.
+ * The tokens of `sql` as each string syntax the session may have reads them: of one known on
+ * (`conforming`), that alone; of one not known, both, as a backslash in a string is a letter of it
+ * in the one and may end it in the other. None where the text cannot be read in any of them.
  */
-export function leavesSession(sql: string, conforming: boolean): boolean {
-  const tokens = sqlTokens(sql, conforming);
-  if (tokens === undefined) return false;
+function readingsOf(sql: string, conforming: boolean): readonly (readonly string[])[] | undefined {
+  const readings = (conforming ? [true] : [true, false])
+    .map((each) => sqlTokens(sql, each))
+    .filter((tokens) => tokens !== undefined);
+  return readings.length === 0 ? undefined : readings;
+}
+
+/** Whether `tokens` change a setting beyond the transaction (`leavesSession`). */
+function leavesIn(tokens: readonly string[]): boolean {
   return tokens.some((token, at) => {
     return (
       token === '`' ||
@@ -93,6 +98,19 @@ export function leavesSession(sql: string, conforming: boolean): boolean {
         !setsForTransaction(tokens, at + 1))
     );
   });
+}
+
+/**
+ * Whether SQL changes the settings of the session beyond the transaction it runs in, which stay
+ * with the connection after it: any change `changesSession` says but those of `SET LOCAL` and of
+ * `set_config(…, true)`, which end with the transaction. A third argument of `set_config` that is
+ * not the word `true` is read as a session's. Read by each string syntax the session may have, a
+ * change either finds counts; a text that cannot be read in any may change one, as a connection
+ * that is closed as it is given back loses nothing but its reconnection.
+ */
+export function leavesSession(sql: string, conforming: boolean): boolean {
+  const readings = readingsOf(sql, conforming);
+  return readings === undefined || readings.some((tokens) => leavesIn(tokens));
 }
 
 /** The words a statement that ends the transaction under way begins with. */
@@ -110,16 +128,8 @@ function endsTransactionAt(tokens: readonly string[], at: number): boolean {
   return after !== 'prepared' && (after !== 'to' || tokens[at] !== 'rollback');
 }
 
-/**
- * Whether the settings a transaction holds for itself (`SET LOCAL`, `set_config(…, true)`) are held
- * after `sql`, a text of a connection's, where they `before` it were: set by a statement of it, let
- * go of where a statement of it ends the transaction, whichever way it is written (`COMMIT;`,
- * `END`, `COMMIT AND CHAIN`), in the order the text has them. A text the lexer cannot read changes
- * nothing it says.
- */
-export function scopedAfter(sql: string, conforming: boolean, before: boolean): boolean {
-  const tokens = sqlTokens(sql, conforming);
-  if (tokens === undefined) return before;
+/** Whether the settings a transaction holds for itself are held after `tokens`, as `before` them. */
+function scopedOver(tokens: readonly string[], before: boolean): boolean {
   let held = before;
   for (const [at, token] of tokens.entries()) {
     const opens = at === 0 || tokens[at - 1] === ';';
@@ -134,6 +144,20 @@ export function scopedAfter(sql: string, conforming: boolean, before: boolean): 
     }
   }
   return held;
+}
+
+/**
+ * Whether the settings a transaction holds for itself (`SET LOCAL`, `set_config(…, true)`) are held
+ * after `sql`, a text of a connection's, where they `before` it were: set by a statement of it, let
+ * go of where a statement of it ends the transaction, whichever way it is written (`COMMIT;`,
+ * `END`, `COMMIT AND CHAIN`), in the order the text has them. Read by each string syntax the
+ * session may have, they are held where either reading holds them; of a text that cannot be read
+ * in any, they may be, as a render through the connection is refused only while its transaction
+ * is open.
+ */
+export function scopedAfter(sql: string, conforming: boolean, before: boolean): boolean {
+  const readings = readingsOf(sql, conforming);
+  return readings === undefined || readings.some((tokens) => scopedOver(tokens, before));
 }
 
 /** A temporary table's row type, which ordinary staging-table DDL intentionally does not follow. */
