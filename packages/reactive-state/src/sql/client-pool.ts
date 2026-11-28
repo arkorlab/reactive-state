@@ -210,12 +210,13 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     },
   };
   /**
-   * Sends `text`, a statement of this checked-out connection outside a render, as `send` does,
-   * noting what it does of its settings. A connection idle holds no setting of a transaction — a
+   * Sends `text`, a statement outside a render, as `send` does, noting what a checked-out
+   * connection's does of its settings. A connection idle holds no setting of a transaction — a
    * `SET LOCAL` outside one set none — and the text that ends one lets go of it where it ran to its
    * end (`scopedAfter`): where the answer is a promise and no statement went after it.
    */
-  const marking = (text: string, send: () => unknown): unknown => {
+  const marking = (text: unknown, send: () => unknown): unknown => {
+    if (!checkedOut || typeof text !== 'string') return send();
     if (scoped && !inTransaction(connection)) scoped = false;
     if (plans.leavesSession(text)) changed = true;
     const { ran, sent } = plans.scopedAfter(text, scoped);
@@ -291,14 +292,11 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       );
     }
     const text = textOf(first);
-    if (checkedOut && typeof text === 'string') {
-      return marking(text, () => outside('query', [first, ...rest]));
-    }
-    if (typeof text === 'string') {
+    if (!checkedOut && typeof text === 'string') {
       if (plans.changesOneSession(text)) return poolRefused(first, rest, text, 'session');
       if (plans.leavesTransactionOpen(text)) return poolRefused(first, rest, text, 'transaction');
     }
-    return outside('query', [first, ...rest]);
+    return marking(text, () => outside('query', [first, ...rest]));
   };
   const checkOut = async (args: readonly unknown[]): Promise<PoolConnection> =>
     tracked((await called(connection, 'connect', args)) as PoolConnection, plans, true);
