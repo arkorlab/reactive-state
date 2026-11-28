@@ -149,8 +149,9 @@ function quietBefore(read: Node, statement: Statement): boolean {
 
 /**
  * Whether `node`, a part of `parent`, runs again on a later pass of a loop: its condition, its
- * update or its body, but a `for` initializer and a `for-of` or `for-in` iterable, which run once.
- * What the loop's body does may replace the method before that pass.
+ * update or its body, and the target a `for-of` or `for-in` head assigns each value to, but a `for`
+ * initializer and a `for-of` or `for-in` iterable, which run once. What the loop's body does may
+ * replace the method before that pass.
  */
 function rerun(parent: Node, node: Node): boolean {
   if (isForStatement(parent)) {
@@ -161,7 +162,8 @@ function rerun(parent: Node, node: Node): boolean {
     ];
     return repeated.includes(node);
   }
-  if (isForOfStatement(parent) || isForInStatement(parent)) return node === parent.statement;
+  if (isForOfStatement(parent) || isForInStatement(parent))
+    return node === parent.initializer || node === parent.statement;
   return isWhileStatement(parent) || isDoStatement(parent);
 }
 
