@@ -459,3 +459,31 @@ describe('a text the pool itself runs on one connection of many', () => {
     TEST_TIMEOUT_MS,
   );
 });
+
+describe('a checkout released twice', () => {
+  it(
+    'is refused the second time, as `pg` refuses it, and touches no other checkout',
+    async () => {
+      const { pool, tracked } = await pooled();
+      const first = await tracked.connect();
+      first.release();
+      const second = await tracked.connect();
+      onTestFinished(() => {
+        second.release();
+      });
+
+      const listening = second.listenerCount('error');
+
+      expect(() => {
+        first.release();
+      }).toThrow('already been released');
+
+      // The connection the second checkout holds is still its own: no one gave it back, nor took
+      // the listener the checkout put on it.
+      expect(pool.idleCount).toBe(pool.totalCount - 1);
+      expect(second.listenerCount('error')).toBe(listening);
+      await expect(second.query('SELECT 1 AS one')).resolves.toMatchObject({ rows: [{ one: 1 }] });
+    },
+    TEST_TIMEOUT_MS,
+  );
+});

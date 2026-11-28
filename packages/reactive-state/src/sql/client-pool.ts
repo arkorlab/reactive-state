@@ -322,7 +322,13 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       },
     ]);
   };
+  let released = false;
   const release = (...given: unknown[]): unknown => {
+    // As `pg` answers a second release of one checkout: the connection may be another's by now.
+    if (released) {
+      throw new Error('Release called on client which has already been released to the pool.');
+    }
+    released = true;
     // What it changed of its settings is not for the next to take it: it is closed.
     const args = changed ? [true] : given;
     called(connection, 'removeListener', ['error', heard]);
