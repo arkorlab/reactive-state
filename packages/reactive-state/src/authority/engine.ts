@@ -10,20 +10,13 @@ import {
 import type { GateAnswer, GuardAnswer, SharedRenderAnswer, SiteShape } from '../routing.ts';
 import { type DatabaseDefinition, definitionOf } from '../server/schema.ts';
 import { watchUntracked } from '../server/untracked.ts';
-import {
-  BUILD_MISMATCH,
-  HTTP_BAD_REQUEST,
-  HTTP_CONFLICT,
-  HTTP_NOT_FOUND,
-  HTTP_UNAUTHORIZED,
-  UNKNOWN_COMPONENT,
-} from '../status.ts';
+import { HTTP_BAD_REQUEST, HTTP_NOT_FOUND, UNKNOWN_COMPONENT } from '../status.ts';
 import { verifySubscription } from './bindings.ts';
 import { Committer } from './commits.ts';
 import { Database } from './database.ts';
 import { Diagnostics } from './diagnostics.ts';
 import { held, reporterOf } from './error-hook.ts';
-import { assertId, refusal } from './errors.ts';
+import { assertId, buildMismatch, refusal, signInFirst } from './errors.ts';
 import { timeoutOf } from './evaluation.ts';
 import { afterOperation, externalTailOf } from './external-engine.ts';
 import { type ExternalTail, pollIntervalOf } from './external-tail.ts';
@@ -42,7 +35,7 @@ import type {
   Stats,
   Watched,
 } from './model.ts';
-import { runOperation } from './operations.ts';
+import { OperationFlights } from './operation-flights.ts';
 import { type Registry, registryOf } from './programs.ts';
 import { PublicViews } from './public.ts';
 import { publishes } from './records.ts';
@@ -67,6 +60,10 @@ import { type Root, statusView, viewOf } from './views.ts';
  * operation — holds the queue while it awaits that code, so every component of a page reads one
  * snapshot, and a write's last read and its commit run with nothing between them.
  *
+ * One kind of call leaves it while it waits: a server operation of an application whose every table
+ * is external runs apart from it (`OperationFlights`), entering it to begin and to end, so that a
+ * page's render does not wait for the application's own database to answer it.
+ *
  * Only the statements that write are in a transaction; the reads before them are not, and need not
  * be. On a developer's machine nothing else writes the file, nor anything else what the engine keeps
  * in a Durable Object's storage. That storage would refuse the `BEGIN` an operation-long transaction
@@ -82,10 +79,6 @@ watchUntracked();
 
 const compare = (a: string, b: string): number => a.localeCompare(b);
 
-function buildMismatch(): Error {
-  return refusal(HTTP_CONFLICT, BUILD_MISMATCH, 'The application was updated. Reload the page.');
-}
-
 /** The clock each engine was opened with, which the streams read without the engine offering it. */
 const CLOCKS = new WeakMap<AuthorityEngine, () => number>();
 
@@ -99,11 +92,6 @@ const CLOCKS = new WeakMap<AuthorityEngine, () => number>();
  */
 export function engineNow(engine: AuthorityEngine): number {
   return (CLOCKS.get(engine) ?? Date.now)();
-}
-
-/** The refusal of a request of no session, or of one that ended: sign in first (401). */
-function signInFirst(): Error {
-  return refusal(HTTP_UNAUTHORIZED, 'UNAUTHENTICATED', 'Sign in first.');
 }
 
 export class AuthorityEngine {
@@ -131,10 +119,18 @@ export class AuthorityEngine {
   readonly #tail: ExternalTail;
   /** Whether any table is read through a store, whose log an operation may have written to. */
   readonly #external: boolean;
+  /**
+   * The runs of server operations apart from the queue, for an application whose every declared
+   * table is external: none the authority holds, so the operations write none of its own. Nothing
+   * for any other.
+   */
+  readonly #operations: OperationFlights;
   /** How the authority asks its site for a page: the host's, once it knows the site. */
   #site: SiteFetch | undefined;
   #queue: Promise<undefined> = Promise.resolve(undefined);
   #closed = false;
+  /** The authority's closing, once begun: what every `close()` answers. */
+  #closing: Promise<void> | undefined;
 
   /** A stream's hold on external logs, and the host's immediate and scheduled reads. */
   readonly following = (): (() => void) => this.#tail.follow();
@@ -149,6 +145,10 @@ export class AuthorityEngine {
     this.#definition = definitionOf(options.database);
     const stores = storesOf(this.#definition);
     this.#external = stores.size > 0;
+    this.#operations = new OperationFlights(
+      (body) => this.#run(body),
+      this.#external && stores.size === this.#definition.tables.size,
+    );
     const externalPollMs = pollIntervalOf(options.externalPollMs);
     this.#publishes = publishes(this.#definition);
     this.#clock = options.clock ?? Date.now;
@@ -249,6 +249,23 @@ export class AuthorityEngine {
       this.#tail.refreshLater();
       this.#diagnostics.report();
     }
+  }
+
+  /** What closing does, once. */
+  async #shutdown(): Promise<void> {
+    // What the shared views have under way — a request of the site above all — is let go of first,
+    // and what is queued then is let finish: nothing of either outlives the authority. No store's
+    // log is read after.
+    this.#operations.refuse();
+    this.#tail.stop();
+    await this.#shared.stop();
+    await this.#queue;
+    // Each run apart from the queue ends in it, so the queue is waited for again.
+    await this.#operations.settled();
+    await this.#queue;
+    this.#closed = true;
+    this.#db.close();
+    this.#listeners.clear();
   }
 
   #session(id: unknown): Session {
@@ -498,7 +515,9 @@ export class AuthorityEngine {
     // Its faults are told once the wait below is over: a fault's answer is the error itself.
     const told = held(this.#core);
     try {
-      return await this.#run(async () => writeField(told.core, sessionId, operation, toRow));
+      return await this.#operations.write(told.core, sessionId, operation.operationId, async () =>
+        writeField(told.core, sessionId, operation, toRow),
+      );
     } finally {
       // The application's triggers logged the row: what read it by other keys than its condition
       // names follows the log, whose read waits for the queue this write held.
@@ -532,7 +551,7 @@ export class AuthorityEngine {
     // Its faults are told once the wait below is over: a fault's answer is the error itself.
     const told = held(this.#core);
     try {
-      receipt = await this.#run(async () => runOperation(told.core, sessionId, call, running));
+      receipt = await this.#operations.operate(told.core, sessionId, call, running);
       return receipt;
     } finally {
       // An answer again by its id reads it too: the first may not have read it yet, or was lost.
@@ -656,15 +675,9 @@ export class AuthorityEngine {
     });
   }
 
+  /** Closes the authority once; every call, at once or later, is answered by the first's end. */
   async close(): Promise<void> {
-    // What the shared views have under way — a request of the site above all — is let go of first,
-    // and what is queued then is let finish: nothing of either outlives the authority. No store's
-    // log is read after.
-    this.#tail.stop();
-    await this.#shared.stop();
-    await this.#queue;
-    this.#closed = true;
-    this.#db.close();
-    this.#listeners.clear();
+    this.#closing ??= this.#shutdown();
+    return this.#closing;
   }
 }

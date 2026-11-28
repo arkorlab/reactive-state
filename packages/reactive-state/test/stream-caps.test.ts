@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { AssertedSession } from '../src/asserted.ts';
-import { Engine } from '../src/authority/index.ts';
+import { createAuthorityServer, Engine } from '../src/authority/index.ts';
 import type { Watched } from '../src/authority/model.ts';
 import {
   MAX_STREAMS,
@@ -10,12 +10,14 @@ import {
 } from '../src/authority/stream-admission.ts';
 import type { SessionId } from '../src/client/contract.ts';
 import { EventStreams } from '../src/cloudflare/stream.ts';
-import type { RootRequest } from '../src/program.ts';
+import { INTERNAL_HEADER, type RootRequest } from '../src/program.ts';
+import { readEvents } from './support/event-stream.ts';
 import { type PipedReader, pipedReader } from './support/piped-reader.ts';
 import { application, BUILD } from './support/program.ts';
 
 /** The caps on the event streams one authority holds, where a stream is admitted. */
 
+const TOKEN = 'test-token';
 const PAGE: RootRequest = {
   build: BUILD,
   component: 'components/project',
@@ -755,5 +757,55 @@ describe('the Durable Object host’s writes to a session’s streams at its cap
     expect(takenBy(readers)).toStrictEqual(
       each(MAX_STREAMS_PER_SESSION, [OPENING, HEARTBEAT, HEARTBEAT]),
     );
+  });
+});
+
+describe('the caps on the Node host’s streams', () => {
+  it('answers the stream past the cap 429 TOO_MANY_STREAMS, and admits one as another closes', async () => {
+    const engine = open();
+    const app = await createAuthorityServer({
+      engine,
+      internalToken: TOKEN,
+      port: 0,
+      testMode: true,
+    });
+    onTestFinished(async () => {
+      await app.close();
+    });
+    const { sessionId } = await engine.login('alice');
+    const { frame } = await engine.render(sessionId, PAGE);
+    const url = `${app.url}/api/events?${new URLSearchParams({ subscription: frame.subscription }).toString()}`;
+    const headers = { [INTERNAL_HEADER]: TOKEN, cookie: `reactive_session=${sessionId}` };
+    const controllers: AbortController[] = [];
+    const readers = [];
+    for (let held = 0; held < MAX_STREAMS_PER_SESSION; held += 1) {
+      const controller = new AbortController();
+      controllers.push(controller);
+      const response = await fetch(url, { headers, signal: controller.signal });
+
+      expect(response.status).toBe(200);
+
+      readers.push(readEvents(response));
+    }
+    const listened = vi.spyOn(engine, 'onCommit');
+
+    const refused = await fetch(url, { headers });
+
+    expect(refused.status).toBe(429);
+    await expect(refused.json()).resolves.toMatchObject({ code: 'TOO_MANY_STREAMS' });
+    expect(listened).not.toHaveBeenCalled();
+
+    await readers[0]?.cancel();
+    controllers[0]?.abort();
+    await vi.waitFor(async () => {
+      const again = new AbortController();
+      controllers.push(again);
+      const response = await fetch(url, { headers, signal: again.signal });
+
+      expect(response.status).toBe(200);
+    });
+    for (const controller of controllers) {
+      controller.abort();
+    }
   });
 });
