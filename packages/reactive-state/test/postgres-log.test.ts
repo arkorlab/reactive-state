@@ -428,14 +428,25 @@ describe.skipIf(SERVER_URL === undefined)('a pool on a server of many sessions',
       // As the package's README sets it up. The engine polls once a minute here.
       const listening = await clientOf(setup.name);
       const heard = vi.fn();
-      listening.on('notification', heard);
+      const marked = vi.fn();
+      // A notice of the sender's own, sent after the commit's: the server delivers one session's
+      // notices in the order they were sent, so what the log's channel says of the commit has been
+      // said by the time this one is heard.
+      const marker = `${setup.follow.channel}_heard`;
+      listening.on('notification', (message) => {
+        (message.channel === marker ? marked : heard)();
+      });
       await listening.query(`LISTEN ${setup.follow.channel}`);
+      await listening.query(`LISTEN ${marker}`);
 
       await setup.owner.query("UPDATE tasks SET n = 7 WHERE id = '1'");
+      await setup.owner.query(`NOTIFY ${marker}`);
 
       await vi.waitFor(() => {
-        expect(heard).toHaveBeenCalledTimes(1);
+        expect(marked).toHaveBeenCalledTimes(1);
       });
+
+      expect(heard).toHaveBeenCalledTimes(1);
 
       await engine.poke();
 
