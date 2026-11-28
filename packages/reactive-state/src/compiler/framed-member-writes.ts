@@ -28,7 +28,12 @@ import { globalPathOf } from './code-globals.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedDescriptorEntries } from './framed-descriptor-entries.ts';
-import { framedArgumentPrefix, framedKeyNames, framedMemberNames } from './framed-keys.ts';
+import {
+  framedArgumentPrefix,
+  framedKeyNames,
+  framedMemberNames,
+  framedPossibleArguments,
+} from './framed-keys.ts';
 import { isConstantDeclaration, sourceChanged } from './framed-source-changes.ts';
 import { isTypeOnly } from './scope.ts';
 
@@ -243,8 +248,9 @@ function assignedEntries(node: Expression): readonly MemberWrite[] {
   const [target, ...given] = prefix.values;
   const written = target === undefined ? undefined : writtenPath(target);
   if (written === undefined) return [];
-  // Past a spread whose order is unknown, each value it may supply may be a source.
-  const sources = [...given, ...(prefix.alternatives ?? [])];
+  // Past a spread whose order is unknown, each value it may supply may be a source; past one the
+  // walk cannot read, each source written after it still is one.
+  const sources = [...given, ...framedPossibleArguments(prefix)];
   const entries = sources.flatMap((source) => sourceEntries(source));
   if (prefix.unknown) entries.push(undefined);
   const writes: MemberWrite[] = [];
@@ -325,10 +331,10 @@ function definedEntry(node: CallExpression): readonly MemberWrite[] {
   const [target, key, descriptor] = prefix.values;
   const written = target === undefined ? undefined : writtenPath(target);
   if (written === undefined || (key === undefined && !prefix.unknown)) return [];
-  // A descriptor past a spread whose order is unknown is any value that spread may supply, none of
-  // them the descriptor for certain (`reopened`); a key past one is not shown, and the write is then
-  // under any name.
-  const descriptors = descriptor === undefined ? (prefix.alternatives ?? []) : [descriptor];
+  // A descriptor past a spread whose order is unknown is any value that spread may supply, and past
+  // one the walk cannot read any argument written after it: each is possible there, none the
+  // definite last write. A key past one is not shown, and the write is then under any name.
+  const descriptors = descriptor === undefined ? framedPossibleArguments(prefix) : [descriptor];
   const names = key === undefined ? undefined : framedKeyNames(key);
   return descriptors.flatMap((each) => {
     return (framedDescriptorEntries(each, ['value']) ?? []).map((value) => {

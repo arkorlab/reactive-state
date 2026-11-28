@@ -14,7 +14,7 @@ import { arrayError } from './framed-arrays.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedNativeArguments } from './framed-native-arguments.ts';
-import { framedObjectSources } from './framed-object-members.ts';
+import { framedTypedObjectSources, framedUnreadAssign } from './framed-object-members.ts';
 
 /** A native Request converts its selected init body rather than the whole options object. */
 
@@ -34,9 +34,10 @@ export function framedRequestBodyText(node: Node, words: BodyWords): boolean {
   const options = prefix.values[1];
   if (options === undefined || prefix.unknown) return false;
   const selectedOptions = requestOptions(options) ?? options;
-  const sources = framedObjectSources(selectedOptions, ['body']) ?? [
-    { value: options, keys: ['body'] },
-  ];
+  const typed = { value: options, keys: ['body'] };
+  const written = framedTypedObjectSources(selectedOptions, ['body']);
+  const sources = written === undefined ? [typed] : [...written];
+  if (written !== undefined && framedUnreadAssign(selectedOptions)) sources.push(typed);
   return sources.some(
     ({ value, keys }) =>
       words.error(value, keys) || (keys.length === 0 && arrayError(value, words, node)),

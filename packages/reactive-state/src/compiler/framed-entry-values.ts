@@ -48,7 +48,12 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { calledArrayElements } from './framed-called-elements.ts';
 import { possibleFields } from './framed-entry-fields.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
-import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
+import {
+  framedAppliedArguments,
+  framedArgumentPrefix,
+  framedKeyNames,
+  framedPossibleArguments,
+} from './framed-keys.ts';
 import { namesInType } from './framed-references.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { checkedTuple } from './framed-tuple-escapes.ts';
@@ -119,7 +124,8 @@ interface EntrySelection {
 
 /**
  * An unknown entry key may replace the selected field, but cannot erase an earlier possible value.
- * Past a spread whose order is unknown, each value it may supply may be the entry's value.
+ * Past a spread whose order is unknown, each value it may supply may be the entry's value, and past
+ * one the compile cannot read, each value written after it.
  */
 function entryValue(call: CallExpression, entry: Expression, key: string): EntrySelection {
   const written = argumentTupleWrites(call, entry);
@@ -130,7 +136,7 @@ function entryValue(call: CallExpression, entry: Expression, key: string): Entry
   const name = prefix.values[0];
   const value = prefix.values[1];
   if (name === undefined || value === undefined || prefix.unknown) {
-    const possible = (prefix.alternatives ?? []).map((each) => ({ value: each, keys: [] }));
+    const possible = framedPossibleArguments(prefix).map((each) => ({ value: each, keys: [] }));
     return { ...opaque, values: [...opaque.values, ...possible] };
   }
   const names = written.key ? undefined : framedKeyNames(name);
