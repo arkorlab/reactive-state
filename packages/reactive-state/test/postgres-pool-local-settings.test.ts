@@ -138,6 +138,43 @@ describe.skipIf(SERVER_URL === undefined)(
     );
 
     it(
+      'renders through it after a text that ended the transaction before a statement of it failed',
+      async () => {
+        const setup = await pooled();
+        const connection = await held(setup);
+        const ofHeld = await rendering(setup, connection);
+        await localize(connection);
+
+        await expect(connection.query('COMMIT; SELECT 1 / 0')).rejects.toThrow(/division by zero/u);
+
+        // `pg` tells a query's error before the server says it is ready: its state is the last
+        // one's until then, and a statement answered after it is what waits for that.
+        await connection.query('SELECT 1');
+
+        await expect(ofHeld.render()).resolves.toContain('a,b');
+      },
+      SERVER_TIMEOUT_MS,
+    );
+
+    it(
+      'refuses a render through it after a text that failed before it ended the transaction',
+      async () => {
+        const setup = await pooled();
+        const connection = await held(setup);
+        const ofHeld = await rendering(setup, connection);
+        await localize(connection);
+        await connection.query('SAVEPOINT sp');
+
+        await expect(connection.query('SELECT 1 / 0; COMMIT')).rejects.toThrow(/division by zero/u);
+
+        await connection.query('ROLLBACK TO SAVEPOINT sp');
+
+        await expect(ofHeld.render()).rejects.toThrow(REFUSED);
+      },
+      SERVER_TIMEOUT_MS,
+    );
+
+    it(
       'renders through it once the transaction ended, as the setting ended with it',
       async () => {
         const setup = await pooled();

@@ -2,7 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { pgTable, text } from 'drizzle-orm/pg-core';
 import { Client, Pool } from 'pg';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { scopedAfter } from '../src/sql/guards.ts';
 import { followDrizzle } from '../src/sql/index.ts';
@@ -232,6 +232,93 @@ describe('a render through a connection whose transaction that set a setting end
   );
 });
 
+describe('a render through a connection whose transaction may still hold what was set', () => {
+  it.each([['SELECT 1 / 0; COMMIT'], ['SELECT 1 / 0; ROLLBACK'], ['SELECT 1 / 0; END']])(
+    'is refused after `%s` failed before it ended the transaction, as a savepoint brings it back',
+    async (ending) => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofPool = await rendering(setup, setup.tracked);
+      const ofHeld = await rendering(setup, connection);
+
+      await expect(ofPool()).resolves.toContain('a,b');
+
+      for (const statement of ['BEGIN', 'SET LOCAL search_path = other', 'SAVEPOINT sp']) {
+        await connection.query(statement);
+      }
+
+      await expect(connection.query(ending)).rejects.toThrow(/division by zero/u);
+
+      await connection.query('ROLLBACK TO SAVEPOINT sp');
+
+      await expect(ofHeld()).rejects.toThrow(REFUSED);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'is read after a `COMMIT` that ended it, through the answer and not the text alone',
+    async () => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+      await connection.query('BEGIN');
+      await connection.query('SET LOCAL search_path = other');
+      await connection.query('SELECT 1; COMMIT AND CHAIN');
+
+      await expect(ofHeld()).resolves.toContain('a,b');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'is read in the next transaction after a `SET LOCAL` that outside one set nothing',
+    async () => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+      await connection.query('SET LOCAL statement_timeout = 5000');
+      await connection.query('BEGIN');
+
+      await expect(ofHeld()).resolves.toContain('a,b');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'is refused where a setting is made while its plan is asked, which its reads were not noted of',
+    async () => {
+      const setup = await pooled();
+      const real = await setup.pool.connect();
+      real.release();
+      const connection = await held(setup);
+      const ofPool = await rendering(setup, setup.tracked);
+      const ofHeld = await rendering(setup, connection);
+      await connection.query('BEGIN');
+      // The host's own code sets it as the plan's last statement is answered, outside the render.
+      const asked = Promise.withResolvers<undefined>();
+      const setting = (async () => {
+        await asked.promise;
+        return connection.query('SET LOCAL search_path = other');
+      })();
+      const target = real as unknown as { query: (...args: unknown[]) => Promise<unknown> };
+      const query = target.query.bind(real);
+      vi.spyOn(target, 'query').mockImplementation(async (...args: unknown[]) => {
+        const answered = await query(...args);
+        if (String(args[0]).includes('EXPLAIN') && args.every((each) => typeof each !== 'object')) {
+          asked.resolve(undefined);
+          await setting;
+        }
+        return answered;
+      });
+
+      await expect(ofHeld()).rejects.toThrow(REFUSED);
+      expect(ofPool).toBeDefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
 describe('the transaction-local settings a text leaves', () => {
   it.each([
     ['SET LOCAL search_path = other', false, true],
@@ -259,7 +346,7 @@ describe('the transaction-local settings a text leaves', () => {
     ['DO $$ BEGIN PERFORM 1; END $$', true, true],
     ['BEGIN', true, true],
   ])('reads `%s` of %j as %j', (sql, before, after) => {
-    expect(scopedAfter(sql, true, before)).toBe(after);
+    expect(scopedAfter(sql, true, before).ran).toBe(after);
   });
 
   // Read in each syntax the session may have, as a backslash in a plain string may end it in one.
@@ -272,6 +359,6 @@ describe('the transaction-local settings a text leaves', () => {
     ["SELECT E'a'\n'b'", true, false, true],
     ["SELECT 'unfinished", true, false, true],
   ])('reads `%s` of syntax known on %j, of %j, as %j', (sql, conforming, before, after) => {
-    expect(scopedAfter(sql, conforming, before)).toBe(after);
+    expect(scopedAfter(sql, conforming, before).ran).toBe(after);
   });
 });
