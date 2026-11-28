@@ -350,7 +350,8 @@ describe.skipIf(SERVER_URL === undefined)('a state bound to a row, through a poo
 
       await setup.other.query('COMMIT');
 
-      await expect(sending).rejects.toBeDefined();
+      // The serialization failure, not any other, which the resend then recovers from.
+      await expect(sending).rejects.toMatchObject({ code: '40001' });
 
       await setup.engine.update(setup.session, sent);
 
