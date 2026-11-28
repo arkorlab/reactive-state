@@ -375,7 +375,8 @@ function exposedArgumentPrefix(
   }
   for (const node of unplaced.toReversed()) pending.push({ node, seen: selected.seen });
   const written = tupleTargetWrites(selected.seen, call, context.spread, 'any');
-  const later = written.filter((node) => !alternatives.includes(node));
+  const named = new Set(alternatives);
+  const later = written.filter((node) => !named.has(node));
   const past = [...later, ...writtenPast(call, pending, context.reached)];
   return endedPrefix({ values, unknown: true, alternatives }, past);
 }
