@@ -163,8 +163,9 @@ function argumentPrefix(
 
 /**
  * What is written past the place a prefix ends at: each argument still `pending` there, and what
- * the array of a later spread was written with — the rest of an exposed array first. A spread among
- * them that the compile cannot read supplies nothing it can name, and a hole writes nothing. What a
+ * the array of a later spread was written with — the rest of an exposed array first — and, of an
+ * exposed one, what was written into any of its entries (`tupleTargetWrites`). A spread among them
+ * that the compile cannot read supplies nothing it can name, and a hole writes nothing. What a
  * spread before them holds comes first, so none of them stands at a known position: an array that
  * several spreads reach adds what it was written with once.
  */
@@ -186,6 +187,7 @@ function writtenPast(
     expanded.add(selected.array);
     const written = selected.array.elements.toReversed();
     for (const node of written) pending.push({ node, seen: selected.seen });
+    if (selected.exposed) past.push(...tupleTargetWrites(selected.seen, call, each.node, 'any'));
   }
   return past;
 }
@@ -372,19 +374,23 @@ function exposedArgumentPrefix(
     unplaced = others;
   }
   for (const node of unplaced.toReversed()) pending.push({ node, seen: selected.seen });
-  const past = writtenPast(call, pending, context.reached);
+  const written = tupleTargetWrites(selected.seen, call, context.spread, 'any');
+  const later = written.filter((node) => !alternatives.includes(node));
+  const past = [...later, ...writtenPast(call, pending, context.reached)];
   return endedPrefix({ values, unknown: true, alternatives }, past);
 }
 
 /**
  * A tuple's written first-entry replacements remain possible receivers after its proof is lost:
  * those written before the `spread` that reads it, in the call's own work too, and those a later
- * pass or another owner may run first.
+ * pass or another owner may run first. Where an `'any'` entry is asked, the replacements of each
+ * entry, which stay possible values of the array among what is written past the prefix.
  */
 function tupleTargetWrites(
   aliases: ReadonlySet<FrameBinding>,
   call: CallExpression | NewExpression,
   spread: Node,
+  entries: 'any' | 'first' = 'first',
 ): readonly Expression[] {
   const values: Expression[] = [];
   const owner = executionOwner(call);
@@ -395,7 +401,7 @@ function tupleTargetWrites(
       TARGET_WRITES.has(node.operatorToken.kind) &&
       (node.end <= spread.pos || tupleWriteBefore(node, call, aliases, owner)) &&
       framedPossibleBranch(node) &&
-      firstTupleEntry(node.left, aliases)
+      tupleEntry(node.left, aliases, entries)
     )
       values.push(node.right);
     node.forEachChild((child) => {
@@ -429,12 +435,19 @@ function tupleWriteBefore(
   return false;
 }
 
-/** Only slot zero of the same lexical tuple or resolved constant alias supplies its receiver. */
-function firstTupleEntry(target: Expression, aliases: ReadonlySet<FrameBinding>): boolean {
+/**
+ * Only slot zero of the same lexical tuple or resolved constant alias supplies its receiver; any
+ * entry of it, whatever index names it, may supply a value of it.
+ */
+function tupleEntry(
+  target: Expression,
+  aliases: ReadonlySet<FrameBinding>,
+  entries: 'any' | 'first',
+): boolean {
   const value = unwrapped(target);
   if (!isElementAccessExpression(value)) return false;
   const index = constantValue(value.argumentExpression);
-  if (index !== 0 && index !== '0') return false;
+  if (entries === 'first' && index !== 0 && index !== '0') return false;
   const holder = unwrapped(value.expression);
   const selected = isIdentifier(holder) ? frameBindingOf(holder) : undefined;
   return selected?.keys.length === 0 && aliases.has(selected.binding);
