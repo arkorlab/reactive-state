@@ -382,6 +382,13 @@ describe('a text the pool itself runs on one connection of many', () => {
     ["BEGIN; INSERT INTO tasks VALUES ('c', 'three')"],
     ['SELECT 1; BEGIN'],
     ['COMMIT; BEGIN'],
+    // A chained end starts the transaction again.
+    ['BEGIN; COMMIT AND CHAIN'],
+    ['BEGIN; ROLLBACK AND CHAIN'],
+    ['BEGIN; COMMIT WORK AND CHAIN'],
+    ['BEGIN; END TRANSACTION AND CHAIN'],
+    ['BEGIN; ABORT AND CHAIN'],
+    ['BEGIN; COMMIT AND CHAIN; COMMIT AND CHAIN'],
   ])('leaves a transaction open: `%s`', (statement) => {
     expect(leavesTransactionOpen(statement, true)).toBe(true);
   });
@@ -397,6 +404,10 @@ describe('a text the pool itself runs on one connection of many', () => {
     ['DO $$ BEGIN PERFORM 1; END $$'],
     ['SELECT begin_at FROM tasks'],
     ["COMMIT PREPARED 'x'"],
+    ['BEGIN; COMMIT AND NO CHAIN'],
+    ['BEGIN; COMMIT AND CHAIN; COMMIT'],
+    ['BEGIN; COMMIT AND CHAIN; ROLLBACK AND NO CHAIN'],
+    ['COMMIT AND CHAIN'],
   ])('leaves none open: `%s`', (statement) => {
     expect(leavesTransactionOpen(statement, true)).toBe(false);
   });
@@ -405,6 +416,8 @@ describe('a text the pool itself runs on one connection of many', () => {
     ['BEGIN'],
     ['START TRANSACTION READ ONLY'],
     ["BEGIN; INSERT INTO tasks VALUES ('c', 'three')"],
+    ["BEGIN; INSERT INTO tasks VALUES ('c', 'three'); COMMIT AND CHAIN"],
+    ['BEGIN; ROLLBACK AND CHAIN'],
   ])(
     'refuses `%s`, which would give the next to take the connection a transaction no one commits',
     async (statement) => {

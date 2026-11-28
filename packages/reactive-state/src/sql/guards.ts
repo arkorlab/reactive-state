@@ -197,15 +197,25 @@ export function scopedAfter(sql: string, conforming: boolean, before: boolean): 
 }
 
 /**
+ * Whether the end of a transaction that begins at `at` of `tokens` starts another at once
+ * (`COMMIT AND CHAIN`), with its options before it (`WORK`, `TRANSACTION`).
+ */
+function chainsAt(tokens: readonly string[], at: number): boolean {
+  const next = tokens[at + 1];
+  const from = at + (next === 'work' || next === 'transaction' ? 2 : 1);
+  return tokens[from] === 'and' && tokens[from + 1] === 'chain';
+}
+
+/**
  * Whether `tokens`, a text's, leave a transaction open: one opened (`BEGIN`, `START TRANSACTION`)
- * that no later statement of it ends.
+ * that no later statement of it ends, or ends and chains to another.
  */
 function opensIn(tokens: readonly string[]): boolean {
   let open = false;
   for (const [at, token] of tokens.entries()) {
     if (at !== 0 && tokens[at - 1] !== ';') continue;
     if (token === 'begin' || (token === 'start' && tokens[at + 1] === 'transaction')) open = true;
-    else if (endsTransactionAt(tokens, at)) open = false;
+    else if (endsTransactionAt(tokens, at)) open &&= chainsAt(tokens, at);
   }
   return open;
 }
@@ -213,7 +223,8 @@ function opensIn(tokens: readonly string[]): boolean {
 /**
  * Whether SQL leaves a transaction open on the connection it runs on: of a pool, one that is given
  * to the next to take it, who would write into a transaction no one commits. A text that opens one
- * and ends it (`BEGIN; …; COMMIT`) leaves none. Read by each string syntax the session may have; a
+ * and ends it (`BEGIN; …; COMMIT`) leaves none, one that chains (`COMMIT AND CHAIN`) leaves another
+ * open. Read by each string syntax the session may have; a
  * text that cannot be read in any is for `changesSession` to refuse.
  */
 export function leavesTransactionOpen(sql: string, conforming: boolean): boolean {
