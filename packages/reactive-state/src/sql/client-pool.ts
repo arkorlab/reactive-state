@@ -177,10 +177,20 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
   let scoped = false;
   /** How many statements went through `marking`: which of them is the last. */
   let sends = 0;
+  /** How many of them are not answered yet, which the state of the connection cannot tell of. */
+  let pending = 0;
+  /**
+   * Lets go of the setting of a transaction that the connection, idle, cannot hold: where no
+   * statement is queued — the state `pg` keeps is of the last one answered, and one that is queued
+   * may open the transaction or set what the marker is for.
+   */
+  const idled = (): void => {
+    if (scoped && pending === 0 && !inTransaction(connection)) scoped = false;
+  };
   /** Whether a setting of this connection's differs from those the plans of the pool were asked under. */
   const unplanned = (): boolean => {
     // The transaction's own settings end with it.
-    if (scoped && !inTransaction(connection)) scoped = false;
+    idled();
     return changed || scoped;
   };
   const planner: Planner = {
@@ -217,13 +227,20 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
    */
   const marking = (text: unknown, send: () => unknown): unknown => {
     if (!checkedOut || typeof text !== 'string') return send();
-    if (scoped && !inTransaction(connection)) scoped = false;
+    idled();
     if (plans.leavesSession(text)) changed = true;
     const { ran, sent } = plans.scopedAfter(text, scoped);
     scoped = sent;
     sends += 1;
     const mine = sends;
-    const answered = send();
+    pending += 1;
+    let answered: unknown;
+    try {
+      answered = send();
+    } catch (error) {
+      pending -= 1;
+      throw error;
+    }
     if (ran !== sent && answered instanceof Promise) {
       const ended = (): void => {
         if (sends === mine) scoped = ran;
@@ -232,6 +249,16 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       // connection's own state lets go of once it is idle.
       // eslint-disable-next-line unicorn/prefer-then-catch -- the caller must see it at once
       void answered.then(ended, ignored);
+    }
+    if (answered instanceof Promise) {
+      const left = (): void => {
+        pending -= 1;
+      };
+      // eslint-disable-next-line unicorn/prefer-then-catch -- the caller must see it at once
+      void answered.then(left, left);
+    } else {
+      // No answer to wait for: a callback or a submittable, whose end this cannot tell.
+      pending -= 1;
     }
     return answered;
   };

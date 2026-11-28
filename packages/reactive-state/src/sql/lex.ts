@@ -134,11 +134,18 @@ function continuedAt(sql: string, at: number): boolean {
   return false;
 }
 
+/** Keeps in `bodies` the text of the dollar-quoted body that runs from `at` to `end` of `sql`, if one does. */
+function keepBody(sql: string, at: number, end: number, bodies: string[]): void {
+  DOLLAR.lastIndex = at;
+  const [opening] = DOLLAR.exec(sql) ?? [];
+  if (opening !== undefined) bodies.push(sql.slice(at + opening.length, end - opening.length));
+}
+
 /**
  * `sql` in lower case, of no comment, string or dollar-quoted body, each quoted name a `"` — one of
  * Unicode escapes (`U&"x"`) a `` ` ``, after which `UESCAPE` may stand.
  */
-function plainOf(sql: string, conforming: boolean): string | undefined {
+function plainOf(sql: string, conforming: boolean, bodies?: string[]): string | undefined {
   const plain: string[] = [];
   let at = 0;
   while (at < sql.length) {
@@ -148,6 +155,7 @@ function plainOf(sql: string, conforming: boolean): string | undefined {
       plain.push(lowered(sql[at] ?? ''));
       at += 1;
     } else {
+      if (bodies !== undefined && sql[at] === '$') keepBody(sql, at, end, bodies);
       if (sql[at] === '"' && !opensUnicode(plain)) {
         plain.push('"', sql.slice(at + 1, end - 1), '"');
       } else {
@@ -227,6 +235,15 @@ export function sqlTokens(sql: string, conforming: boolean): readonly string[] |
   }
   pushTokens(tokens, plain.slice(at));
   return tokens;
+}
+
+/**
+ * The text of each dollar-quoted body of `sql` (`$$…$$`, `$tag$…$tag$`), as the code a `DO` block
+ * runs is written. Nothing where the text cannot be read, as `sqlTokens` says.
+ */
+export function dollarBodies(sql: string, conforming: boolean): readonly string[] | undefined {
+  const bodies: string[] = [];
+  return plainOf(sql, conforming, bodies) === undefined ? undefined : bodies;
 }
 
 /**
