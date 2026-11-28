@@ -4,7 +4,7 @@ import { pgTable, text } from 'drizzle-orm/pg-core';
 import { Client, Pool, type PoolClient } from 'pg';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { leavesSession } from '../src/sql/guards.ts';
+import { changesSession, leavesSession, leavesTransactionOpen } from '../src/sql/guards.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { engineOf } from './support/drizzle.ts';
 
@@ -49,6 +49,19 @@ async function pooled() {
   return { follow, pg: store, pool, tracked };
 }
 
+/** Runs `body` on a connection `tracked` checks out, given back as it ends, whatever it did. */
+async function checkedOut(
+  tracked: Awaited<ReturnType<typeof pooled>>['tracked'],
+  body: (held: PoolClient) => Promise<void>,
+): Promise<void> {
+  const held = await tracked.connect();
+  try {
+    await body(held);
+  } finally {
+    held.release();
+  }
+}
+
 describe('a checked-out connection of a pool that changes a setting', () => {
   it.each([
     ['SET statement_timeout = 5000'],
@@ -62,11 +75,11 @@ describe('a checked-out connection of a pool that changes a setting', () => {
     'is closed as it is given back, after `%s`',
     async (statement) => {
       const { pool, tracked } = await pooled();
-      const held = await tracked.connect();
       const values = statement.includes('$1') ? ['5000', false] : [];
 
-      await held.query(statement, values);
-      held.release();
+      await checkedOut(tracked, async (held) => {
+        await held.query(statement, values);
+      });
 
       expect(pool.totalCount).toBe(0);
     },
@@ -77,12 +90,12 @@ describe('a checked-out connection of a pool that changes a setting', () => {
     'is closed as it is given back, after a setting changed in a transaction that commits',
     async () => {
       const { pool, tracked } = await pooled();
-      const held = await tracked.connect();
 
-      await held.query('BEGIN');
-      await held.query('SET statement_timeout = 5000');
-      await held.query('COMMIT');
-      held.release();
+      await checkedOut(tracked, async (held) => {
+        await held.query('BEGIN');
+        await held.query('SET statement_timeout = 5000');
+        await held.query('COMMIT');
+      });
 
       expect(pool.totalCount).toBe(0);
     },
@@ -100,8 +113,11 @@ describe('a checked-out connection of a pool that changes a setting', () => {
         expect(connected).toHaveBeenCalledTimes(1);
       });
       const [, held, done] = connected.mock.calls[0] as [unknown, PoolClient, () => void];
-      await held.query('SET statement_timeout = 5000');
-      done();
+      try {
+        await held.query('SET statement_timeout = 5000');
+      } finally {
+        done();
+      }
 
       expect(pool.totalCount).toBe(0);
     },
@@ -116,12 +132,12 @@ describe('a checked-out connection of a pool that changes a setting', () => {
     'is given back as it is, after `%s` in a transaction',
     async (statement) => {
       const { pool, tracked } = await pooled();
-      const held = await tracked.connect();
 
-      await held.query('BEGIN');
-      await held.query(statement);
-      await held.query('COMMIT');
-      held.release();
+      await checkedOut(tracked, async (held) => {
+        await held.query('BEGIN');
+        await held.query(statement);
+        await held.query('COMMIT');
+      });
 
       expect(pool.totalCount).toBe(1);
       expect(pool.idleCount).toBe(1);
@@ -133,11 +149,11 @@ describe('a checked-out connection of a pool that changes a setting', () => {
     'is given back as it is, after a text that only names a setting',
     async () => {
       const { pool, tracked } = await pooled();
-      const held = await tracked.connect();
 
-      await held.query("SELECT 'SET search_path = other'");
-      await held.query("UPDATE tasks SET title = 'reset all' WHERE id = 'a'");
-      held.release();
+      await checkedOut(tracked, async (held) => {
+        await held.query("SELECT 'SET search_path = other'");
+        await held.query("UPDATE tasks SET title = 'reset all' WHERE id = 'a'");
+      });
 
       expect(pool.totalCount).toBe(1);
       expect(pool.idleCount).toBe(1);
@@ -251,10 +267,10 @@ describe('the settings a text changes that the session’s string syntax makes h
     'closes a connection given back after a text of a backslash it could not read before a render',
     async () => {
       const { pool, tracked } = await pooled();
-      const held = await tracked.connect();
 
-      await held.query(String.raw`SET application_name = 'a\b'`);
-      held.release();
+      await checkedOut(tracked, async (held) => {
+        await held.query(String.raw`SET application_name = 'a\b'`);
+      });
 
       expect(pool.totalCount).toBe(0);
     },
@@ -265,13 +281,180 @@ describe('the settings a text changes that the session’s string syntax makes h
     'gives a connection back as it is after a text of a backslash that changes no setting',
     async () => {
       const { pool, tracked } = await pooled();
-      const held = await tracked.connect();
 
-      await held.query(String.raw`SELECT 'C:\dir'`);
-      held.release();
+      await checkedOut(tracked, async (held) => {
+        await held.query(String.raw`SELECT 'C:\dir'`);
+      });
 
       expect(pool.totalCount).toBe(1);
       expect(pool.idleCount).toBe(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('a statement of a text that is no setting of a session', () => {
+  it.each([
+    ['SET CONSTRAINTS ALL DEFERRED'],
+    ['set constraints all immediate'],
+    ['SET CONSTRAINTS tasks_pkey DEFERRED'],
+    ['BEGIN; SET CONSTRAINTS ALL DEFERRED; COMMIT'],
+  ])('is no change of one: `%s`', (statement) => {
+    expect(changesSession(statement, true)).toBe(false);
+    expect(leavesSession(statement, true)).toBe(false);
+  });
+
+  it.each([['SET constraints.name = 1'], ['SET "constraints".name = 1']])(
+    'is one of a setting of that prefix: `%s`',
+    (statement) => {
+      expect(changesSession(statement, true)).toBe(true);
+      expect(leavesSession(statement, true)).toBe(true);
+    },
+  );
+
+  it(
+    'gives a connection back as it is after `SET CONSTRAINTS` in a transaction',
+    async () => {
+      const { pool, tracked } = await pooled();
+
+      await checkedOut(tracked, async (held) => {
+        await held.query('BEGIN');
+        await held.query('SET CONSTRAINTS ALL DEFERRED');
+        await held.query('COMMIT');
+      });
+
+      expect(pool.totalCount).toBe(1);
+      expect(pool.idleCount).toBe(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('a text the pool itself runs on one connection of many', () => {
+  it.each([
+    [String.raw`SET application_name = 'a\b'`, false],
+    ["SET application_name = E'a'\n'b'", false],
+    ["SET application_name = E'a'\n'b'", true],
+    [String.raw`SET application_name = 'it\'s'`, false],
+    ["SELECT 'unfinished", true],
+    ['SELECT /* unfinished', false],
+  ])('is changed by `%s` of a syntax known on: %j', (statement, conforming) => {
+    expect(changesSession(statement, conforming)).toBe(true);
+  });
+
+  it.each([
+    [String.raw`SELECT 'C:\dir'`, false],
+    [String.raw`INSERT INTO tasks VALUES ('a', 'C:\dir')`, false],
+    [String.raw`SELECT * FROM tasks WHERE title ~ '\d+'`, false],
+    [String.raw`SELECT E'a\nb'`, false],
+    ["SELECT 'it''s'", true],
+  ])('is not changed by `%s` of a syntax known on: %j', (statement, conforming) => {
+    expect(changesSession(statement, conforming)).toBe(false);
+  });
+
+  it.each([[String.raw`SET application_name = 'a\b'`], ["SET application_name = E'a'\n'b'"]])(
+    'refuses `%s` as it would change one connection of many, of a syntax not known on',
+    async (statement) => {
+      const { tracked } = await pooled();
+
+      await expect(tracked.query(statement)).rejects.toThrow(/one connection/u);
+      await expect(tracked.query({ text: statement })).rejects.toThrow(/one connection/u);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'runs a text of a backslash that changes nothing, before a render has said the syntax',
+    async () => {
+      const { tracked } = await pooled();
+
+      await expect(tracked.query(String.raw`SELECT 'C:\dir' AS path`)).resolves.toMatchObject({
+        rows: [{ path: String.raw`C:\dir` }],
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    ['BEGIN'],
+    ['begin isolation level serializable'],
+    ['START TRANSACTION'],
+    ["BEGIN; INSERT INTO tasks VALUES ('c', 'three')"],
+    ['SELECT 1; BEGIN'],
+    ['COMMIT; BEGIN'],
+  ])('leaves a transaction open: `%s`', (statement) => {
+    expect(leavesTransactionOpen(statement, true)).toBe(true);
+  });
+
+  it.each([
+    ['SELECT 1'],
+    ['COMMIT'],
+    ["BEGIN; INSERT INTO tasks VALUES ('c', 'three'); COMMIT"],
+    ['BEGIN; SELECT 1; END'],
+    ['BEGIN; ROLLBACK'],
+    ['BEGIN; SELECT 1; COMMIT; SELECT 2'],
+    ["SELECT 'BEGIN'"],
+    ['DO $$ BEGIN PERFORM 1; END $$'],
+    ['SELECT begin_at FROM tasks'],
+    ["COMMIT PREPARED 'x'"],
+  ])('leaves none open: `%s`', (statement) => {
+    expect(leavesTransactionOpen(statement, true)).toBe(false);
+  });
+
+  it.each([
+    ['BEGIN'],
+    ['START TRANSACTION READ ONLY'],
+    ["BEGIN; INSERT INTO tasks VALUES ('c', 'three')"],
+  ])(
+    'refuses `%s`, which would give the next to take the connection a transaction no one commits',
+    async (statement) => {
+      const { pool, tracked } = await pooled();
+
+      await expect(tracked.query(statement)).rejects.toThrow(/transaction this leaves open/u);
+      await expect(tracked.query({ text: statement })).rejects.toThrow(
+        /transaction this leaves open/u,
+      );
+      await expect(pool.query('SELECT 1')).resolves.toBeDefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'tells a callback of the refusal, as `pg` tells it a fault',
+    async () => {
+      const { tracked } = await pooled();
+      const heard = vi.fn();
+
+      Reflect.apply(Reflect.get(tracked, 'query') as (...args: unknown[]) => unknown, tracked, [
+        'BEGIN',
+        heard,
+      ]);
+
+      await vi.waitFor(() => {
+        expect(heard).toHaveBeenCalledTimes(1);
+      });
+
+      expect(String(heard.mock.calls[0]?.[0])).toMatch(/transaction this leaves open/u);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'runs a text that opens a transaction and ends it, and a transaction of a checked-out connection',
+    async () => {
+      const { pool, tracked } = await pooled();
+
+      await tracked.query("BEGIN; INSERT INTO tasks VALUES ('c', 'three'); COMMIT");
+      await checkedOut(tracked, async (held) => {
+        await held.query('BEGIN');
+        await held.query("INSERT INTO tasks VALUES ('d', 'four')");
+        await held.query('COMMIT');
+      });
+
+      await expect(pool.query('SELECT count(*)::int AS n FROM tasks')).resolves.toMatchObject({
+        rows: [{ n: 4 }],
+      });
+      expect(pool.idleCount).toBe(pool.totalCount);
     },
     TEST_TIMEOUT_MS,
   );

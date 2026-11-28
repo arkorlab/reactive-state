@@ -28,12 +28,13 @@ import { boundOf } from './serialized.ts';
  * a setting changed on a pool reaches one connection of many, which the plans of every other
  * connection were not asked under, so a text that changes one is refused there. A checked-out
  * connection may change its own, as a transaction does; of what it changes beyond that — a `SET`
- * not `LOCAL`, a `set_config` of a session's — it is closed as it is given back, and no render
- * plans a statement through it. Nor does one through it while its open transaction holds a setting
- * of its own (`SET LOCAL`, `set_config(…, true)`): the plans of the pool were not asked under it,
- * and one asked under it would be read by every other connection. It is read again once the
- * transaction ends, which a statement lets go of where the server ran its end: a text that fails
- * before it leaves the transaction as it was.
+ * not `LOCAL`, a `set_config` of a session's, a text no string syntax can read — it is closed as it
+ * is given back, and no render plans a statement through it. Nor does one through it while its open
+ * transaction holds a setting of its own (`SET LOCAL`, `set_config(…, true)`): the plans of the
+ * pool were not asked under it, and one asked under it would be read by every other connection. It
+ * is read again once the transaction ends, which a statement lets go of where the server ran its
+ * end: a text that fails before it leaves the transaction as it was. A pool refuses, too, a text
+ * that leaves a transaction open (`BEGIN`), which it would give the next to take the connection.
  *
  * A render may settle while a transaction it opened runs on. What opens and ends one reads nothing
  * and runs regardless, so Drizzle's `rollback` still ends it, and a connection given back in one is
@@ -105,14 +106,25 @@ function textOf(first: unknown): unknown {
   return typeof first === 'object' && first !== null ? Reflect.get(first, 'text') : first;
 }
 
+/** Why a pool runs no text that changes one connection of many, or leaves a transaction open on one. */
+const POOL_REFUSALS = {
+  session:
+    'A pool runs a statement on one connection of many, which this would change alone: give every connection its settings as it connects, or set them in a transaction of a checked-out connection',
+  transaction:
+    'A pool runs a statement on one connection of many, and gives it to the next to take it, which would write into the transaction this leaves open: open it on a checked-out connection, or end it in the same text',
+} as const;
+
 /**
- * That a pool does not run `sql`, which would change one connection of many, answered as `pg`
- * answers a fault of a call of the form of `first` and `rest`.
+ * That a pool does not run `sql`, for the reason `why` says, answered as `pg` answers a fault of a
+ * call of the form of `first` and `rest`.
  */
-function sessionRefused(first: unknown, rest: readonly unknown[], sql: string): unknown {
-  const refusal = new Error(
-    `A pool runs a statement on one connection of many, which this would change alone: give every connection its settings as it connects, or set them in a transaction of a checked-out connection: ${sql}`,
-  );
+function poolRefused(
+  first: unknown,
+  rest: readonly unknown[],
+  sql: string,
+  why: keyof typeof POOL_REFUSALS,
+): unknown {
+  const refusal = new Error(`${POOL_REFUSALS[why]}: ${sql}`);
   const callback = callbackOf(first, rest);
   if (typeof callback !== 'function') return Promise.reject(refusal);
   queueMicrotask(() => {
@@ -282,8 +294,9 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     if (checkedOut && typeof text === 'string') {
       return marking(text, () => outside('query', [first, ...rest]));
     }
-    if (typeof text === 'string' && plans.changesOneSession(text)) {
-      return sessionRefused(first, rest, text);
+    if (typeof text === 'string') {
+      if (plans.changesOneSession(text)) return poolRefused(first, rest, text, 'session');
+      if (plans.leavesTransactionOpen(text)) return poolRefused(first, rest, text, 'transaction');
     }
     return outside('query', [first, ...rest]);
   };

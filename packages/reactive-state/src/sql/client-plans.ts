@@ -5,6 +5,7 @@ import {
   changesContext,
   changesSession,
   leavesSession,
+  leavesTransactionOpen,
   namesTemporaryRowType,
   scopedAfter,
   type Scoped,
@@ -304,6 +305,11 @@ export class Plans {
   /** What `sql`, a text of a checked-out connection's, does of the settings its transaction holds. */
   scopedAfter(sql: string, before: boolean): Scoped {
     return scopedAfter(sql, this.#catalog?.conforming === true, before);
+  }
+
+  /** Whether a text run on one connection of many leaves a transaction open on it. */
+  leavesTransactionOpen(sql: string): boolean {
+    return leavesTransactionOpen(sql, this.#catalog?.conforming === true);
   }
 
   /**
