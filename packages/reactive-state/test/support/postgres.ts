@@ -50,14 +50,20 @@ export function poolOf(database: string, { user, ...options }: PoolConfig = {}):
 export async function databaseOf(ddl: string): Promise<{ name: string; owner: Client }> {
   const name = `reactive_${String(process.pid)}_${crypto.randomUUID().replaceAll('-', '')}`;
   const admin = new Client({ connectionString: urlOf('postgres') });
-  await admin.connect();
-  await admin.query(`CREATE DATABASE ${name}`);
-  await admin.end();
+  try {
+    await admin.connect();
+    await admin.query(`CREATE DATABASE ${name}`);
+  } finally {
+    await admin.end();
+  }
   onTestFinished(async () => {
     const dropping = new Client({ connectionString: urlOf('postgres') });
-    await dropping.connect();
-    await dropping.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await dropping.end();
+    try {
+      await dropping.connect();
+      await dropping.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    } finally {
+      await dropping.end();
+    }
   });
   const owner = await clientOf(name);
   await owner.query(ddl);
