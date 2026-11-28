@@ -382,6 +382,13 @@ describe('a text the pool itself runs on one connection of many', () => {
     ["BEGIN; INSERT INTO tasks VALUES ('c', 'three')"],
     ['SELECT 1; BEGIN'],
     ['COMMIT; BEGIN'],
+    // A chained end starts the transaction again.
+    ['BEGIN; COMMIT AND CHAIN'],
+    ['BEGIN; ROLLBACK AND CHAIN'],
+    ['BEGIN; COMMIT WORK AND CHAIN'],
+    ['BEGIN; END TRANSACTION AND CHAIN'],
+    ['BEGIN; ABORT AND CHAIN'],
+    ['BEGIN; COMMIT AND CHAIN; COMMIT AND CHAIN'],
   ])('leaves a transaction open: `%s`', (statement) => {
     expect(leavesTransactionOpen(statement, true)).toBe(true);
   });
@@ -397,6 +404,10 @@ describe('a text the pool itself runs on one connection of many', () => {
     ['DO $$ BEGIN PERFORM 1; END $$'],
     ['SELECT begin_at FROM tasks'],
     ["COMMIT PREPARED 'x'"],
+    ['BEGIN; COMMIT AND NO CHAIN'],
+    ['BEGIN; COMMIT AND CHAIN; COMMIT'],
+    ['BEGIN; COMMIT AND CHAIN; ROLLBACK AND NO CHAIN'],
+    ['COMMIT AND CHAIN'],
   ])('leaves none open: `%s`', (statement) => {
     expect(leavesTransactionOpen(statement, true)).toBe(false);
   });
@@ -405,6 +416,8 @@ describe('a text the pool itself runs on one connection of many', () => {
     ['BEGIN'],
     ['START TRANSACTION READ ONLY'],
     ["BEGIN; INSERT INTO tasks VALUES ('c', 'three')"],
+    ["BEGIN; INSERT INTO tasks VALUES ('c', 'three'); COMMIT AND CHAIN"],
+    ['BEGIN; ROLLBACK AND CHAIN'],
   ])(
     'refuses `%s`, which would give the next to take the connection a transaction no one commits',
     async (statement) => {
@@ -483,6 +496,78 @@ describe('a checkout released twice', () => {
       expect(pool.idleCount).toBe(pool.totalCount - 1);
       expect(second.listenerCount('error')).toBe(listening);
       await expect(second.query('SELECT 1 AS one')).resolves.toMatchObject({ rows: [{ one: 1 }] });
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('a `DO` block whose code the lexer reads as a string', () => {
+  // [text, changes a setting of the session, leaves one beyond the transaction]
+  it.each([
+    ['DO $$ BEGIN SET search_path = other; END $$', true, true],
+    ["DO $$ BEGIN PERFORM set_config('application_name', 'x', false); END $$", true, true],
+    ['DO $$ BEGIN IF true THEN SET statement_timeout = 5000; END IF; END $$', true, true],
+    ['DO LANGUAGE plpgsql $body$ BEGIN RESET ALL; END $body$', true, true],
+    ["SELECT 1; DO $$ BEGIN PERFORM set_config('a', 'b', $1); END $$", true, true],
+    ['DO $$ BEGIN SET LOCAL statement_timeout = 5000; END $$', true, false],
+    ["DO $$ BEGIN PERFORM set_config('a', 'b', true); END $$", true, false],
+    ["DO $$ BEGIN EXECUTE format('SET %I = 1', 'application_name'); END $$", false, true],
+    ["DO $$ BEGIN UPDATE tasks SET title = 'x' WHERE id = 'a'; END $$", false, false],
+    [
+      'DO $$ BEGIN INSERT INTO tasks VALUES (1) ON CONFLICT (id) DO UPDATE SET title = 1; END $$',
+      false,
+      false,
+    ],
+    ['DO $$ BEGIN PERFORM 1; END $$', false, false],
+    ['DO $$ BEGIN SET CONSTRAINTS ALL DEFERRED; END $$', false, false],
+    // Not a block: the body of a function a text makes is not run by it.
+    [
+      'CREATE FUNCTION f() RETURNS void AS $$ BEGIN SET search_path = other; END $$ LANGUAGE plpgsql',
+      false,
+      false,
+    ],
+    ['SELECT $$ SET search_path = other $$ AS note', false, false],
+  ])(
+    'is read: `%s`, of the session %j, beyond its transaction %j',
+    (statement, changes, leaves) => {
+      expect(changesSession(statement, true)).toBe(changes);
+      expect(leavesSession(statement, true)).toBe(leaves);
+    },
+  );
+
+  it(
+    'is refused by the pool where its code sets a setting, and run where it sets none',
+    async () => {
+      const { tracked } = await pooled();
+
+      await expect(tracked.query("DO $$ BEGIN SET application_name = 'x'; END $$")).rejects.toThrow(
+        /one connection/u,
+      );
+      await expect(tracked.query('DO $$ BEGIN PERFORM 1; END $$')).resolves.toBeDefined();
+      await expect(
+        tracked.query("DO $$ BEGIN UPDATE tasks SET title = 'y' WHERE id = 'a'; END $$"),
+      ).resolves.toBeDefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'closes a connection given back after its code set a setting, and not after one that set none',
+    async () => {
+      const { pool, tracked } = await pooled();
+
+      await checkedOut(tracked, async (held) => {
+        await held.query('DO $$ BEGIN PERFORM 1; END $$');
+      });
+
+      expect(pool.totalCount).toBe(1);
+      expect(pool.idleCount).toBe(1);
+
+      await checkedOut(tracked, async (held) => {
+        await held.query("DO $$ BEGIN SET application_name = 'x'; END $$");
+      });
+
+      expect(pool.totalCount).toBe(0);
     },
     TEST_TIMEOUT_MS,
   );
