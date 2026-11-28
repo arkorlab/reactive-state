@@ -261,4 +261,17 @@ describe('the transaction-local settings a text leaves', () => {
   ])('reads `%s` of %j as %j', (sql, before, after) => {
     expect(scopedAfter(sql, true, before)).toBe(after);
   });
+
+  // Read in each syntax the session may have, as a backslash in a plain string may end it in one.
+  it.each([
+    [String.raw`SET LOCAL application_name = 'a\b'`, false, false, true],
+    [String.raw`SELECT 'C:\dir'`, false, false, false],
+    [String.raw`SELECT 'C:\dir'; COMMIT`, false, true, false],
+    [String.raw`SELECT set_config('application_name', 'a\b', true)`, false, false, true],
+    [String.raw`SET LOCAL application_name = 'it\'s'`, false, false, true],
+    ["SELECT E'a'\n'b'", true, false, true],
+    ["SELECT 'unfinished", true, false, true],
+  ])('reads `%s` of syntax known on %j, of %j, as %j', (sql, conforming, before, after) => {
+    expect(scopedAfter(sql, conforming, before)).toBe(after);
+  });
 });
