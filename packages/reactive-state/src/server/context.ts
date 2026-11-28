@@ -74,6 +74,8 @@ export interface Evaluation {
 export interface TableRead {
   readonly table: string;
   readonly where: Readonly<Record<string, string>>;
+  /** Whether this is the table every statement reads of a change of the schema, not of its reads. */
+  readonly schema?: true;
 }
 
 interface Slot {

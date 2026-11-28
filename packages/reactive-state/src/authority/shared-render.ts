@@ -63,6 +63,9 @@ function sharedScope(core: Core, call: Call): Scope {
     onRead: () => {
       core.metrics.appReads += 1;
     },
+    onTableReads: (reads) => {
+      core.diagnostics.read(reads);
+    },
     optionalUser: () => bound('currentUser()'),
     shared: true,
     tables: core.tables,

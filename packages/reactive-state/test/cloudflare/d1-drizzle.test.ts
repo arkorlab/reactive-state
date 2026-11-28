@@ -52,6 +52,17 @@ function explaining(times = Infinity): D1Database {
   });
 }
 
+/** `db`, of a D1 that answers `EXPLAIN SELECT 1` and fails every plan's batch. */
+function failingBatches(): D1Database {
+  return new Proxy(db, {
+    get: (target, key) => {
+      if (key === 'batch') return () => Promise.reject(new Error('no batch of reads'));
+      if (key === 'prepare') return (statement: string) => target.prepare(statement);
+      return Reflect.get(target, key) as unknown;
+    },
+  });
+}
+
 /** What a render of `read` failed of, as Drizzle's error of the query holds it. */
 async function refusal(read: () => Promise<unknown>): Promise<string> {
   try {
@@ -292,6 +303,27 @@ describe('a Drizzle schema in D1', () => {
     expect(unplanned.changedBy(renamed)).toBe(true);
     expect(chosen.changedBy(renamed)).toBe(true);
     expect(planned.changedBy(renamed)).toBe(false);
+  });
+
+  it('warns once where plans fail and `EXPLAIN SELECT 1` answers, which no render shows', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {
+      // The warning under test, kept out of the output.
+    });
+    const orm = drizzle(followDrizzle(schema).client(failingBatches()), { schema });
+
+    const tasksRead = await rendered(() =>
+      orm.select().from(tasks).where(eq(tasks.projectId, 'p1')),
+    );
+    await rendered(() => orm.select().from(projects));
+    const follower = await following();
+    await orm.update(projects).set({ title: 'Renamed' }).where(eq(projects.id, 'p2'));
+
+    expect(tasksRead.changedBy(await follower.changed())).toBe(true);
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(warned.mock.calls[0]?.[0]).toContain('plan of `select');
+    expect(warned.mock.calls[0]?.[0]).toContain('no batch of reads');
+
+    warned.mockRestore();
   });
 
   it('reads every table for a while for a plan D1 failed to answer once, then asks it again', async () => {

@@ -1,9 +1,9 @@
-import { is } from 'drizzle-orm';
+import { is, type SQL } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import type { ExternalStore } from '../authority/external.ts';
-import { type Table, table, text } from '../server/schema.ts';
+import { type Table, type TableRows, table, text } from '../server/schema.ts';
 import {
   changeCaptureSql,
   channelOf,
@@ -14,6 +14,8 @@ import {
 import { type Connection, trackedClient } from './client.ts';
 import { generationOf } from './generations.ts';
 import { type KeyColumn, keysOf } from './keys.ts';
+import { postgresRows } from './postgres-rows.ts';
+import type { RowReferences } from './rows.ts';
 import { type DrizzleD1Follow, followSqlite } from './sqlite/follow.ts';
 import { pruneSqlChanges, type Queryable, sqlStore } from './store.ts';
 
@@ -24,7 +26,9 @@ export type { DrizzleD1Follow } from './sqlite/follow.ts';
  * read and written by its own Drizzle, and followed by the authority: a render's queries note the
  * tables their plans read, the tables' triggers log each statement that changed them, and the
  * authority renders again what read a table the log names. The application's database declares
- * them as external tables of one store, whose host follows that log.
+ * them as external tables of one store, whose host follows that log. A component's state may bind
+ * one column of one row (`db.<table>.where(…)`, `rows.ts`), which its setter writes through the
+ * same client.
  *
  * ```ts
  * // @/db
@@ -77,7 +81,9 @@ function schemaTableOf(storeName: string): string {
  * every render's statement reads.
  */
 type FollowedTables<S> = Readonly<Record<`${typeof SCHEMA_TABLE}${string}`, Table>> & {
-  readonly [K in keyof S as S[K] extends PgTable ? K : never]: Table;
+  readonly [K in keyof S as S[K] extends PgTable ? K : never]: Table & {
+    readonly rows: TableRows<SQL | undefined, RowReferences<S[K]>>;
+  };
 };
 
 export interface FollowDrizzleOptions {
@@ -113,7 +119,8 @@ export interface DrizzleFollow<S> {
   /** The statements that make the log and each table's triggers, each run by itself, in order. */
   readonly captureSql: () => readonly string[];
   /**
-   * `client`, a PGlite, whose queries in a render note the tables they read: Drizzle's client. A
+   * `client`, a PGlite, whose queries in a render note the tables they read: Drizzle's client, and
+   * the connection a state bound to a row reads and writes it through — the last one given. A
    * serializer the application gave it (`PGlite.create({ serializers })`) answers the same text of
    * the same value each time it is called, and changes nothing as it is: a render's condition is
    * followed by the text it answers, which is asked before the value is bound.
@@ -169,6 +176,15 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
   const keysByTable = new Map<string, readonly KeyColumn[]>();
   const relations: FollowedRelation[] = [];
   const tables: Record<string, Table> = {};
+  let connection: Queryable | undefined;
+  const connected = (): Queryable => {
+    if (connection === undefined) {
+      throw new Error(
+        'A state bound to a row is read and written through the connection `follow.client` is given, and it was given none.',
+      );
+    }
+    return connection;
+  };
   for (const [name, value] of Object.entries(schema)) {
     if (!is(value, PgTable)) continue;
     const config = getTableConfig(value);
@@ -179,8 +195,10 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
       schema: config.schema ?? 'public',
     };
     // The keys' values of each changed row, as the log keeps them: what a render's conditions name.
-    tables[name] = table(Object.fromEntries(keys.map((key) => [key.field, text()])), {
-      external: storeName,
+    const fields = keys.map((key) => [key.field, text()] as const);
+    tables[name] = Object.freeze({
+      ...table(Object.fromEntries(fields), { external: storeName }),
+      rows: postgresRows(value, keys, connected),
     });
     byRelation.set(relationKey(relation), name);
     keysByTable.set(name, keys);
@@ -212,7 +230,11 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
   return Object.freeze({
     captureSql: () => changeCaptureSql(relations, namespace),
     channel,
-    client: <C extends Connection>(client: C) => trackedClient(client, followed),
+    client: <C extends Connection>(client: C) => {
+      const tracked = trackedClient(client, followed);
+      connection = tracked as unknown as Queryable;
+      return tracked;
+    },
     prune: (client: Queryable, before: number) => pruneSqlChanges(client, before, namespace),
     store: (client: Queryable) => sqlStore(client, followed),
     storeName,

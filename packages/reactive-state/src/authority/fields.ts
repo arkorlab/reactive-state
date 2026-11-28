@@ -1,11 +1,12 @@
 import type {
+  BoundRow,
   ComponentProgram,
   FieldOperation,
   FieldReceipt,
   ProgramUpdater,
   Value,
 } from '../program.ts';
-import { checkValue, defaultOf } from '../server/schema.ts';
+import { checkValue, defaultOf, type RowField } from '../server/schema.ts';
 import {
   HTTP_BAD_REQUEST,
   HTTP_CONFLICT,
@@ -15,10 +16,13 @@ import {
 } from '../status.ts';
 import { type BindingClaims, verifyBinding } from './bindings.ts';
 import { digest } from './canonical.ts';
+import type { RowChange } from './dependencies.ts';
 import { denied, messageOf, refusal } from './errors.ts';
 import { Call } from './evaluation.ts';
+import { Memo } from './memo.ts';
 import type { Core, Session } from './model.ts';
 import { replayPath } from './replay.ts';
+import { rowChange, writeRow } from './row-writes.ts';
 import { lastComponentStep } from './skeleton.ts';
 import { checkUnique } from './transaction.ts';
 import { guardedBy, rendererOf } from './views.ts';
@@ -31,7 +35,9 @@ import { guardedBy, rendererOf } from './views.ts';
  * record, which a write never makes; the value — the one a `set` is sent, or the one an `apply`
  * computes from what the field holds and the values the call captured — checked against the field
  * and each `unique` group the field is of; and the record, the operation's receipt and the change
- * log, committed together.
+ * log, committed together. Of a row of the application's tables (`row-writes.ts`), the path is
+ * rendered again from nothing the memo holds, the row is written first, through the application's
+ * connection, and the receipt then commits with what the row's readers read of it.
  */
 
 /** A thrown value's message, for a refusal that quotes it: never longer than this. */
@@ -96,7 +102,7 @@ async function replayed(
   core: Core,
   session: Session,
   claims: BindingClaims,
-): Promise<'changed' | 'found'> {
+): Promise<BoundRow | 'changed' | 'found'> {
   const call = new Call(`The render of ${claims.root.component} for a write`, core.timeoutMs);
   try {
     const renderer = rendererOf(core, call, session);
@@ -105,7 +111,11 @@ async function replayed(
     if ((await guardedBy(core, renderer, claims.root)).refused) {
       throw denied();
     }
-    const outcome = await replayPath(renderer, claims);
+    // What the memo holds of a table of the application's is as fresh as its log's last read: a
+    // membership the log has not told of the end of would pass. Each component runs now instead.
+    const external = core.tables.store(claims.table) !== undefined;
+    const walking = external ? { ...renderer, memo: new Memo(core.clock) } : renderer;
+    const outcome = await replayPath(walking, claims);
     if (call.fault !== undefined) {
       throw call.fault.error;
     }
@@ -133,11 +143,24 @@ function nextValue(updater: ProgramUpdater, current: Value, operation: FieldOper
   }
 }
 
-/** One write to a field, for the session `sessionId` names; its receipt, or a refusal. */
+/** The column of a row the binding names, of the declaration: not found where it names none. */
+function columnOf(core: Core, claims: BindingClaims): RowField {
+  const column = core.tables.table(claims.table).rows?.fields[claims.field];
+  if (column === undefined) {
+    throw refusal(HTTP_NOT_FOUND, 'NOT_FOUND', 'There is no such record.');
+  }
+  return column;
+}
+
+/**
+ * One write to a field, for the session `sessionId` names; its receipt, or a refusal. `toRow` is
+ * told where a row is what it writes, as the log may then tell of it.
+ */
 export async function writeField(
   core: Core,
   sessionId: unknown,
   operation: FieldOperation,
+  toRow?: () => void,
 ): Promise<FieldReceipt> {
   const session = core.session(sessionId);
   const claims = verifyBinding(core.secret, operation.binding, {
@@ -151,6 +174,8 @@ export async function writeField(
   );
   const updater = updaterOf(issuer, claims, operation);
   const target = await replayed(core, session, claims);
+  const row = typeof target === 'string' ? undefined : target;
+  if (row !== undefined) toRow?.();
   const fingerprint = fingerprintOf(claims, operation);
   const { operationId } = operation;
   const previous = core.db.operation(session.id, operationId);
@@ -171,6 +196,41 @@ export async function writeField(
   if (target === 'changed') {
     throw refusal(HTTP_CONFLICT, TARGET_CHANGED, 'What this writes to has changed.');
   }
+  const computed = (current: Value): unknown => {
+    core.metrics.updaterRuns += 1;
+    return nextValue(updater, current, operation);
+  };
+  /** Commits the operation with `rows`, as what it changed. */
+  const committed = (rows: readonly RowChange[], external?: true): FieldReceipt => {
+    const event = core.commit({
+      ...(external && { external }),
+      kind: 'state',
+      rows,
+      with: (revision) => {
+        core.db.insertOperation({
+          created: core.clock(),
+          fingerprint,
+          id: operationId,
+          kind: 'field',
+          outcome: JSON.stringify({ committedRevision: revision }),
+          revision,
+          sessionId: session.id,
+        });
+      },
+    });
+    return { committedRevision: event.revision, deduplicated: false, operationId };
+  };
+  if (row !== undefined) {
+    await writeRow(core, {
+      apply: updater.kind === 'set' ? undefined : computed,
+      column: columnOf(core, claims),
+      field: claims.field,
+      row,
+      table: claims.table,
+      value: operation.value,
+    });
+    return committed([rowChange(claims.table, row)], true);
+  }
   const record = core.tables.get(claims.table, claims.record);
   const table = core.tables.table(claims.table);
   const definition = table.fields[claims.field];
@@ -178,8 +238,7 @@ export async function writeField(
     throw refusal(HTTP_NOT_FOUND, 'NOT_FOUND', 'There is no such record.');
   }
   const current = record[claims.field] ?? defaultOf(definition);
-  core.metrics.updaterRuns += 1;
-  const next = nextValue(updater, current, operation);
+  const next = computed(current);
   const wrong = checkValue(definition, next);
   if (wrong !== undefined) {
     throw refusal(HTTP_UNPROCESSABLE, 'INVALID_VALUE', wrong);
@@ -189,21 +248,7 @@ export async function writeField(
   // A `unique` group of the field's is held once, as an operation's write keeps it (409).
   const groups = table.unique.filter((group) => group.includes(claims.field));
   checkUnique(core.tables, groups, { id: claims.record, table: claims.table, values: after });
-  const event = core.commit({
-    kind: 'state',
-    rows:
-      next === current ? [] : [{ after, before: record, id: claims.record, table: claims.table }],
-    with: (revision) => {
-      core.db.insertOperation({
-        created: core.clock(),
-        fingerprint,
-        id: operationId,
-        kind: 'field',
-        outcome: JSON.stringify({ committedRevision: revision }),
-        revision,
-        sessionId: session.id,
-      });
-    },
-  });
-  return { committedRevision: event.revision, deduplicated: false, operationId };
+  return committed(
+    next === current ? [] : [{ after, before: record, id: claims.record, table: claims.table }],
+  );
 }

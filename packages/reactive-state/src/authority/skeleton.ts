@@ -1,12 +1,14 @@
-import type { Json, RenderedAction, SiteInputs, SiteRefusal } from '../program.ts';
+import type { Json, RenderedAction, SiteInputs, SiteRefusal, Value } from '../program.ts';
 
 /**
  * A page's components as the authority rendered them, before a session's render is made of them:
  * the tree each rendered, every component in it kept as itself — its id, its key, where it stands
  * in what its parent rendered, and its props' digest, which a binding's path names — and each
- * persistent state as the field it binds, with neither the field's value nor a binding. What one
- * user's render of a component made is the same for each of the user's sessions, and the memo keeps
- * it so; it is plain JSON, which a render's digest is made of. A component's dynamic sites are kept
+ * persistent state as the field it binds, with no binding, and with no value but a row's: the
+ * authority keeps no row, so what one holds is read with the rendering, as anything else its
+ * component read is, and goes with it. What one user's render of a component made is the same for
+ * each of the user's sessions, and the memo keeps it so; it is plain JSON, which a render's digest
+ * is made of. A component's dynamic sites are kept
  * as what they read (`SiteOutput`): what each shows depends on the page's view, and is rendered for
  * each render (`shown`), never kept with the component.
  */
@@ -16,6 +18,8 @@ export interface BoundField {
   readonly table: string;
   readonly id: string;
   readonly field: string;
+  /** What a row holds there, as the rendering read it: of a record the authority keeps, none. */
+  readonly value?: Value;
 }
 
 /** Where a state comes from: the field it binds, or the value a local state starts from. */

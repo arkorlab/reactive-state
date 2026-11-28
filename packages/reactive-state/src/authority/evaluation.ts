@@ -1,5 +1,5 @@
 import type { User } from '../program.ts';
-import { type Evaluation, evaluate } from '../server/context.ts';
+import { type Evaluation, evaluate, type TableRead } from '../server/context.ts';
 import type { Dependencies } from './dependencies.ts';
 import { asRefusal, isAuthorityError } from './errors.ts';
 import { countIn, findIn, getIn, type Reader, readTablesIn, type Tables } from './tables.ts';
@@ -152,18 +152,23 @@ export class Call {
     return error;
   }
 
-  /** Runs the application's `body` in `evaluation`, within the call's time. */
-  async run<T>(evaluation: Evaluation, body: () => Promise<T>): Promise<T> {
+  /** Runs `body`, within the call's time. */
+  async within<T>(body: () => Promise<T>): Promise<T> {
     if (this.#timedOut !== undefined) {
       throw this.#timedOut;
     }
     const { promise, reject } = Promise.withResolvers<never>();
     this.#running.add(reject);
     try {
-      return await Promise.race([evaluate(evaluation, body), promise]);
+      return await Promise.race([body(), promise]);
     } finally {
       this.#running.delete(reject);
     }
+  }
+
+  /** Runs the application's `body` in `evaluation`, within the call's time. */
+  async run<T>(evaluation: Evaluation, body: () => Promise<T>): Promise<T> {
+    return this.within(async () => evaluate(evaluation, body));
   }
 
   /**
@@ -195,6 +200,8 @@ export interface Scope {
   readonly shared?: boolean;
   /** Told of each read of the database the call's code makes: what counts them, where anything does. */
   readonly onRead?: () => void;
+  /** Told of what each statement of the application's own read, where anything counts them. */
+  readonly onTableReads?: (reads: readonly TableRead[]) => void;
 }
 
 /** The fault of code that asked the database for what it may not ask for there. */
@@ -254,7 +261,9 @@ export function renderEvaluation(
       queried?.();
       scope.onRead?.();
       return scope.call.answer(async () => {
-        readTablesIn(reader, await answered());
+        const read = await answered();
+        readTablesIn(reader, read);
+        scope.onTableReads?.(read);
       });
     },
     transaction: () => Promise.reject(misuse(scope, 'db.transaction', why)),

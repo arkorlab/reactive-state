@@ -12,6 +12,8 @@ export interface AuthorityEnv {
   readonly REACTIVE_ACCESS_BYPASS?: string;
   /** The header the site's access protection takes a bypass in; without it, none is sent. */
   readonly REACTIVE_ACCESS_BYPASS_HEADER?: string;
+  /** `on` reports what the object follows to its log, a minute apart (`diagnostics.ts`). */
+  readonly REACTIVE_DIAGNOSTICS?: string;
 }
 
 /** A bypass of the site's access protection: the header it goes in, and its value. */

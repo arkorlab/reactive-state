@@ -7,7 +7,7 @@ import {
   type SiteItem,
   type SiteRendering,
 } from '../program.ts';
-import { type DatabaseDefinition, isRecordId } from '../server/schema.ts';
+import type { DatabaseDefinition } from '../server/schema.ts';
 import { HTTP_FORBIDDEN } from '../status.ts';
 import { digest, frozenJson, isJson, shortDigest } from './canonical.ts';
 import { Dependencies } from './dependencies.ts';
@@ -15,6 +15,7 @@ import { AuthorityError } from './errors.ts';
 import { renderEvaluation, type Scope } from './evaluation.ts';
 import { type CheckedItem, itemsWithin } from './items.ts';
 import type { Memo, MemoEntry } from './memo.ts';
+import { boundOrigin, rowValues } from './row-reads.ts';
 import type {
   ClientOutput,
   JsonKind,
@@ -167,6 +168,13 @@ function programOf(renderer: Renderer, component: string): ComponentProgram {
   return program;
 }
 
+/** What notes one query of a render's code. */
+function queriedBy(renderer: Renderer): () => void {
+  return () => {
+    renderer.counts.renderQueries += 1;
+  };
+}
+
 /**
  * Evaluates a component's program alone, with `props` and `children`, its reads noted in `track`
  * where given: what it answered, the components it renders not rendered. Its props are a copy of
@@ -194,10 +202,7 @@ export async function evaluated(
   let answered: unknown;
   try {
     // What the program answers, though it be no promise: one it throws becomes the run's.
-    const queried = (): void => {
-      renderer.counts.renderQueries += 1;
-    };
-    answered = await call.run(renderEvaluation(renderer.scope, track, queried), () =>
+    answered = await call.run(renderEvaluation(renderer.scope, track, queriedBy(renderer)), () =>
       Promise.resolve(program.evaluate(props, SCOPE)),
     );
   } catch (error) {
@@ -387,7 +392,7 @@ async function outputOf(
       value: await treeOf(renderer, rendered(slot), within, new Region(name)),
     });
   }
-  const states = statesOf(renderer, program, answered.states, within.dependencies);
+  const states = await statesOf(renderer, program, answered.states, within.dependencies);
   const functions: Readonly<Record<string, SiteFunctions>> = Object.fromEntries(
     Object.entries(answered.sites).map(([name, site]) => [name, functionsOf(site)]),
   );
@@ -557,32 +562,24 @@ function sitesOf(
 }
 
 /**
- * Where each state of a component's client part comes from: a field reference binds the field —
- * one the database declares, of a record that may be — and anything else is the value a local
- * state starts from, which crosses to the browser as JSON. The record a field is of is read.
+ * Where each state of a component's client part comes from: a field reference binds the field
+ * (`boundOrigin`), and anything else is the value a local state starts from, which crosses to the
+ * browser as JSON.
  */
-function statesOf(
+async function statesOf(
   renderer: Renderer,
   program: ComponentProgram,
   states: Readonly<Record<string, unknown>>,
   dependencies: Dependencies,
-): Readonly<Record<string, StateOrigin>> {
+): Promise<Readonly<Record<string, StateOrigin>>> {
+  const rows = await rowValues(renderer.scope, states, dependencies, queriedBy(renderer));
   const origins: Record<string, StateOrigin> = {};
   for (const [key, state] of Object.entries(states)) {
     let origin: StateOrigin;
     if (isFieldRef(state)) {
-      const table = renderer.definition.tables.get(state.table);
-      if (
-        table === undefined ||
-        !Object.hasOwn(table.fields, state.field) ||
-        !isRecordId(state.id)
-      ) {
-        throw new Error(
-          `${program.component} binds \`${key}\` to ${state.table}/${state.id}.${state.field}, which the database does not declare.`,
-        );
-      }
-      dependencies.record(state.table, state.id);
-      origin = { field: { field: state.field, id: state.id, table: state.table } };
+      const { component } = program;
+      const { tables } = renderer.definition;
+      origin = boundOrigin(tables, { component, dependencies, key, rows }, state);
     } else if (isJson(state) && !isNode(state)) {
       origin = { value: frozenJson(state) };
     } else {

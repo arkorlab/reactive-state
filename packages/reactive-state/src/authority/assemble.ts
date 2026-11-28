@@ -119,7 +119,7 @@ class Assembling {
     field: BoundField,
   ): StateSource {
     const name = fieldKey(field);
-    this.fields[name] = valueOf(this.#assembler.tables, field);
+    this.fields[name] = field.value ?? valueOf(this.#assembler.tables, field);
     if (program?.writable.includes(key) !== true) {
       return { field: name };
     }

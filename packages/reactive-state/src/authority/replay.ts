@@ -1,4 +1,4 @@
-import { isFieldRef, type SiteInputs } from '../program.ts';
+import { type BoundRow, isFieldRef, type SiteInputs } from '../program.ts';
 import type { BindingClaims } from './bindings.ts';
 import { keyTag, shortDigest } from './canonical.ts';
 import { denied } from './errors.ts';
@@ -39,7 +39,8 @@ import { type Child, type InstanceNode, isDescriptor, isNode, rendered } from '.
  * a parent of it that refuses the session refuses the write (403); one no longer rendered where it
  * was, one rendered with other props, or one whose state binds another field now — a record moved
  * elsewhere, a permission that renders another component in its place — leaves the write nothing to
- * write to (`changed`).
+ * write to (`changed`). A row a state binds is found as the component answered it: its condition's
+ * values are what the application's code computed for this write, and no token carries them.
  */
 
 /**
@@ -310,6 +311,15 @@ function binds(found: Found, claims: BindingClaims): boolean {
   );
 }
 
+/** The row the state `key` of the component `found` binds, as its program answered it. */
+function rowOf(found: Found, key: string): BoundRow | undefined {
+  if (found.from !== 'evaluation' || !isDescriptor(found.answered)) {
+    return undefined;
+  }
+  const state = found.answered.states[key];
+  return isFieldRef(state) ? state.row : undefined;
+}
+
 /** Whether `found` is a component that refused the session. */
 function refused(found: Found | undefined): boolean {
   return found?.from === 'memo' && found.output.kind === 'refused';
@@ -317,14 +327,14 @@ function refused(found: Found | undefined): boolean {
 
 /**
  * Walks the binding's path from its root: `found` where the component whose state it is still
- * binds it, and has a setter for it; `changed` where what the binding names is there no more. A
- * component along the path that refuses the session refuses the write (403); one that faults is the
- * write's fault.
+ * binds it, and has a setter for it — the row, where a row is what it binds — and `changed` where
+ * what the binding names is there no more. A component along the path that refuses the session
+ * refuses the write (403); one that faults is the write's fault.
  */
 export async function replayPath(
   renderer: Renderer,
   claims: BindingClaims,
-): Promise<'changed' | 'found'> {
+): Promise<BoundRow | 'changed' | 'found'> {
   let found = await componentAt(renderer, claims.root.component, {
     children: undefined,
     nodes: {},
@@ -343,7 +353,8 @@ export async function replayPath(
     throw denied();
   }
   const issuer = renderer.programs.get(lastComponentStep(claims.path)?.c ?? claims.root.component);
-  return issuer?.writable.includes(claims.key) === true && binds(found, claims)
-    ? 'found'
-    : 'changed';
+  if (issuer?.writable.includes(claims.key) !== true || !binds(found, claims)) {
+    return 'changed';
+  }
+  return rowOf(found, claims.key) ?? 'found';
 }

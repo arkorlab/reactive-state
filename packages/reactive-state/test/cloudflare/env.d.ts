@@ -12,6 +12,8 @@ declare global {
       readonly ASSERTED: DurableObjectNamespace<AuthorityObject>;
       /** The object that reads the application's external database. */
       readonly EXTERNAL_AUTHORITY: DurableObjectNamespace<AuthorityObject>;
+      /** The object whose states bind rows of the application's D1. */
+      readonly D1_ROWS_AUTHORITY: DurableObjectNamespace<AuthorityObject>;
       /** The application's own D1, with trigger-based change capture. */
       readonly REACTIVE_D1: D1Database;
     }

@@ -1,5 +1,6 @@
 import { db } from '@/db';
 
+export { RowsAuthority } from './d1-where-fixture.ts';
 export { ExternalAuthority } from './external-store-fixture.ts';
 
 import { authorityObject } from '../../src/cloudflare/index.ts';

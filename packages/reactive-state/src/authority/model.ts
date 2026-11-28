@@ -3,6 +3,7 @@ import type { ChangeEvent, ComponentProgram, OperationModule } from '../program.
 import type { AnyDatabase, DatabaseDefinition } from '../server/schema.ts';
 import type { Database } from './database.ts';
 import type { RowChange } from './dependencies.ts';
+import type { Diagnostics, FollowStats } from './diagnostics.ts';
 import type { ExternalStores } from './external.ts';
 import type { Memo } from './memo.ts';
 import type { Registry } from './programs.ts';
@@ -40,6 +41,8 @@ export interface ExternalOptions {
   readonly stores?: ExternalStores | undefined;
   /** How often each store's change log is read while anything follows: a second unless given. */
   readonly externalPollMs?: number | undefined;
+  /** How often what it follows is reported to the log, where the host asks (`diagnostics.ts`). */
+  readonly diagnosticsEveryMs?: number | undefined;
 }
 
 /**
@@ -111,6 +114,8 @@ export interface Watched {
 }
 
 export interface Stats {
+  /** What its reads named of the tables it follows, and why a change rendered one again. */
+  readonly follow: FollowStats;
   readonly revision: number;
   readonly buildId: string;
   /** Pages' roots rendered: for a page, and for an event stream. */
@@ -175,6 +180,7 @@ export type Metrics = Record<
     | 'buildId'
     | 'cacheEntries'
     | 'evaluationsByComponent'
+    | 'follow'
     | 'memoEntries'
     | 'operations'
     | 'revision'
@@ -213,6 +219,7 @@ export interface Core {
   readonly clock: () => number;
   readonly timeoutMs: number;
   readonly metrics: Metrics;
+  readonly diagnostics: Diagnostics;
   /** The components evaluated, by id. */
   readonly evaluatedBy: Map<string, number>;
   /** The session `id` names, while it lasts: the authority's refusal (401) otherwise. */

@@ -184,6 +184,7 @@ class SqlitePlans {
   #generation = 0;
   #unexplainedAt: number | undefined;
   #warned = false;
+  #planWarned = false;
   /** The probe of `EXPLAIN SELECT 1` being asked: what each batch that failed meanwhile awaits. */
   #probing: Promise<boolean> | undefined;
 
@@ -271,6 +272,19 @@ class SqlitePlans {
   }
 
   /**
+   * Says once that plans fail while D1 answers `EXPLAIN`, where nothing else would: each render
+   * stays right, reading every followed table, and what it costs shows on no page.
+   */
+  #warnUnplanned(sql: string, error: unknown): void {
+    if (this.#planWarned) return;
+    this.#planWarned = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `reactive-state: D1 failed the plan of \`${sql.slice(0, LIMITS.shownText)}\`, so a render's statements read every followed table whole for a while: ${String(error)}`,
+    );
+  }
+
+  /**
    * The plan of `sql`, which `binding` is asked of with `values`: of a statement that reads by its
    * words (`readsBesidePlan`) whose plan's batch failed, every followed table for a while; none,
    * of one that reads while D1 answers no `EXPLAIN`, which then reads every followed table and is
@@ -301,6 +315,7 @@ class SqlitePlans {
       // `SELECT`, comments before it too, or a `WITH … SELECT` — its run tells, and it reads every
       // table for a while, so that its renders wait on no failing batch.
       if (readsBesidePlan(sql)) {
+        this.#warnUnplanned(sql, error);
         return { ...this.#everyTable(), until: Date.now() + LIMITS.unexplainedMs };
       }
       throw error;
@@ -374,7 +389,7 @@ class SqlitePlans {
       return wheresOf(terms, values).map((where) => ({ table, where }));
     });
     // The schema's table too: a change of the schema renders the statement again.
-    return [...reads, { table: this.#followed.schemaTable, where: {} }];
+    return [...reads, { schema: true, table: this.#followed.schemaTable, where: {} }];
   }
 }
 

@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import type { SiteShape } from '../routing.ts';
+import { diagnosticsEveryOf } from './diagnostics.ts';
 import { type AuthorityServer, createAuthorityServer } from './http.ts';
 import type { Application, ExternalOptions } from './model.ts';
 import { Engine } from './node-engine.ts';
@@ -77,6 +78,7 @@ export async function startAuthority(options: AuthorityOptions): Promise<Authori
     ...(middleware !== undefined && { middleware }),
     ...(shareViews !== undefined && { shareViews }),
     sessions,
+    diagnosticsEveryMs: diagnosticsEveryOf(process.env['REACTIVE_DIAGNOSTICS']),
     externalPollMs,
     stores,
     ...(buildId !== undefined && { buildId }),

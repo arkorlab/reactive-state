@@ -325,7 +325,7 @@ class Plans {
         this.#followed,
         catalog,
       ),
-      { table: this.#followed.schemaTable, where: {} },
+      { schema: true, table: this.#followed.schemaTable, where: {} },
     ];
   }
 }
@@ -373,7 +373,7 @@ function rebinds(options: unknown): boolean {
 }
 
 /** The SQLSTATE a PostgreSQL error carries, where it carries one. */
-function codeOf(error: unknown): unknown {
+export function codeOf(error: unknown): unknown {
   return typeof error === 'object' && error !== null ? Reflect.get(error, 'code') : undefined;
 }
 

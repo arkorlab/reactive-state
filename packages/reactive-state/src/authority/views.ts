@@ -1,5 +1,6 @@
 import type { Json, View as PageView, RenderStatus } from '../program.ts';
 import { ownValueOf, type RouteParams, type RouteRegistration } from '../routing.ts';
+import type { TableRead } from '../server/context.ts';
 import { HTTP_UNAUTHORIZED } from '../status.ts';
 import { type Assembly, assemble } from './assemble.ts';
 import { type BindingClaims, signBinding } from './bindings.ts';
@@ -62,10 +63,14 @@ export function scopeOf(core: Core, call: Call, session: Session | undefined): S
   const onRead = (): void => {
     core.metrics.appReads += 1;
   };
+  const onTableReads = (reads: readonly TableRead[]): void => {
+    core.diagnostics.read(reads);
+  };
   if (session === undefined) {
     return {
       call,
       onRead,
+      onTableReads,
       optionalUser: () => null,
       tables: core.tables,
       user: () => {
@@ -76,6 +81,7 @@ export function scopeOf(core: Core, call: Call, session: Session | undefined): S
   return {
     call,
     onRead,
+    onTableReads,
     tables: core.tables,
     user: () => ({ id: core.current(session).userId }),
   };
