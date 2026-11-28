@@ -35,6 +35,8 @@ import {
   frameTypeOf,
   type FrameBinding,
 } from './framed-bindings.ts';
+import { framedInstalledMethods, framedMutatorsInstalled } from './framed-collection-prototypes.ts';
+import { framedDeclaredAdmitted } from './framed-declared-collections.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { namesLocalMemberType, namesLocalTypeArgument } from './local-type-reading.ts';
@@ -71,6 +73,29 @@ export function framedCollectionCallbackError(
   const source = collectionSource(receiver);
   if (source === undefined) return undefined;
   if (ownCallback(source, context.call, receiver)) return false;
+  const file = context.call.getSourceFile();
+  const kind = source.map ? 'Map' : 'Set';
+  if (
+    framedInstalledMethods(file, kind, 'forEach').length === 0 &&
+    !framedMutatorsInstalled(file, kind)
+  )
+    return nativeCallbackError(source, proof, context);
+  // A forEach the prototype may replace, or a mutator that stores what it hands on, hands its
+  // callback what the reader cannot read.
+  return nativeCallbackError(source, proof, context) === true || installedAdmits(source, context)
+    ? true
+    : undefined;
+}
+
+/**
+ * What a native forEach hands a callback parameter from a fresh collection's written input or a
+ * declared one's type; see `framedCollectionCallbackError`.
+ */
+function nativeCallbackError(
+  source: Collection,
+  proof: ElementProof,
+  context: CallbackContext,
+): boolean | undefined {
   const { value } = source;
   if (isNewExpression(value)) {
     const entries = value.arguments?.[0];
@@ -94,6 +119,19 @@ export function framedCollectionCallbackError(
     context.keys.length === 0 &&
     namesLocalTypeArgument(source.type, source.map ? MAPS : SETS, argument, context.names)
   );
+}
+
+/**
+ * Whether what a replaced forEach may hand the callback parameter may be an Error: anything where
+ * no type is declared, else what the declared type admits at the read keys: the construction's
+ * own, else the annotation's, past local aliases (`framedDeclaredAdmitted`).
+ */
+function installedAdmits(source: Collection, context: CallbackContext): boolean {
+  const { value, type } = source;
+  const written = isNewExpression(value) ? value.typeArguments : undefined;
+  const argument = source.map && context.parameter === 0 ? 1 : 0;
+  const kind = source.map ? 'Map' : 'Set';
+  return framedDeclaredAdmitted({ written, annotation: type }, kind, argument, context.keys);
 }
 
 /** A last entry with the same written primitive key replaces that Map value before callbacks run. */

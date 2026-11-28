@@ -66,6 +66,22 @@ const CASES = [
     invocation: 'frames(new Map([["x",new Error("ours")]]))',
     refused: false,
   },
+  // A subclass reaches its collection's prototype through `super` in its own body, which a call of
+  // the constructor or of a named method does not hand on, but `super.prototype` does.
+  {
+    id: 'map-super-get-call-data',
+    source:
+      'class Values extends Map<string,{stack:string}>{find(key:string){return super.get(key);}}function frames(map:Values){return map.get("x")!.stack;}',
+    invocation: 'frames(new Map([["x",{stack:"fixed"}]]) as never)',
+    refused: false,
+  },
+  {
+    id: 'subclass-static-super-prototype',
+    source:
+      "function frames(error:Error){class Wrapped extends Map{static patch(e:Error){(super.prototype as unknown as {get:unknown}).get=()=>e;}}Wrapped.patch(error);return new Map<string,{stack?:string}>([['safe',{stack:'fixed'}]]).get('safe')!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
 ];
 
 function record(id: string, reasons: readonly string[]): void {

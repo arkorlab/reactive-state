@@ -1,7 +1,6 @@
 import {
   type CallExpression,
   type Expression,
-  type Node,
   isArrayLiteralExpression,
   isBinaryExpression,
   isBlock,
@@ -13,10 +12,12 @@ import {
   isOmittedExpression,
   isPropertyAccessExpression,
   isSourceFile,
-  isStatement,
   isSpreadElement,
+  isStatement,
   isVariableDeclaration,
   isVariableDeclarationList,
+  type NewExpression,
+  type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -25,6 +26,12 @@ import { useOf } from './code-globals.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
 import { argumentArrayExposed, selectedError } from './framed-array-selections.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { framedInstalledMethods, framedMutatorsInstalled } from './framed-collection-prototypes.ts';
+import {
+  type DeclaredCollection,
+  framedCollectionDeclared,
+  framedDeclaredAdmitted,
+} from './framed-declared-collections.ts';
 import { finiteSetSelection } from './framed-finite-set-results.ts';
 import { iteratorCarriedUnexposed } from './framed-iterator-carried.ts';
 import { framedIteratorFromResult } from './framed-iterator-from.ts';
@@ -40,8 +47,10 @@ import { framedIteratorRestored } from './framed-iterator-restorations.ts';
 import { framedMapKey } from './framed-map-keys.ts';
 import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { framedOriginPrefix } from './framed-origin-prefix.ts';
+import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { setCarriedUnexposed } from './framed-set-carried.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
+import { framedUnreadInput } from './framed-unread-inputs.ts';
 import { constantValue } from './numbers.ts';
 
 /** Immediate native collection iterator results retain their first yielded source value. */
@@ -102,9 +111,12 @@ export function framedIteratorResult(
   );
 }
 
-/** Lexical whole const aliases retain the original native iterator or collection expression. */
+/**
+ * Lexical whole const aliases retain the original native iterator or collection expression, read
+ * past a quiet comma (`framedQuietOperand`).
+ */
 function constantSource(node: Expression): ConstantSource | undefined {
-  let value = unwrapped(node);
+  let value = framedQuietOperand(node);
   const bindings = new Set<FrameBinding>();
   while (isIdentifier(value)) {
     const selected = frameBindingOf(value);
@@ -119,7 +131,7 @@ function constantSource(node: Expression): ConstantSource | undefined {
     )
       return undefined;
     bindings.add(binding);
-    value = unwrapped(binding.initializer);
+    value = framedQuietOperand(binding.initializer);
   }
   return { value, bindings };
 }
@@ -164,13 +176,91 @@ function nativeIteratorValue(
   if (entries === undefined) return undefined;
   const set = framedNativeConstructor(collection.expression, SETS);
   if (!set && !framedNativeConstructor(collection.expression, MAPS)) return undefined;
-  if (method === DEFAULT_ITERATOR)
-    return defaultIteratorValue({ source, node, entries, set }, read, error);
-  if (set) return setValue(entries, method, read, error);
+  return collectionValue({ collection, source, node, entries, set, method }, read, error);
+}
+
+/**
+ * What a native collection's iteration yields: the written collection's selected value, else what
+ * an input the compile cannot read may hold (`yieldedAdmits`); where its method, or a mutator that
+ * stores what it yields, may be replaced on the prototype, what `installedValue` reads.
+ */
+function collectionValue(
+  at: DefaultIterator & YieldedCollection,
+  read: IteratorCapture,
+  error: ErrorValue,
+): boolean | undefined {
+  const { node, set, method, entries } = at;
+  const file = node.getSourceFile();
+  const kind = set ? 'Set' : 'Map';
+  if (framedInstalledMethods(file, kind, method).length > 0 || framedMutatorsInstalled(file, kind))
+    return installedValue(at, read, error);
+  return (
+    writtenValue(at, read, error) ??
+    (framedUnreadInput(entries, !set) && yieldedAdmits(at, read.keys) ? true : undefined)
+  );
+}
+
+/**
+ * What a native collection's iteration yields where its method may be replaced on its prototype
+ * (`framedInstalledMethods`): an Error the native iteration yields, and what may be one where the
+ * declared type admits one at the read keys (`yieldedAdmits`), or anything where none is declared.
+ */
+function installedValue(
+  at: DefaultIterator & YieldedCollection,
+  read: IteratorCapture,
+  error: ErrorValue,
+): true | undefined {
+  if (writtenValue(at, read, error) === true) return true;
+  if (!framedCollectionDeclared(declaredCollection(at), at.set ? 'Set' : 'Map')) return true;
+  return yieldedAdmits(at, read.keys) ? true : undefined;
+}
+
+/** What a native collection made from written entries yields first, at the selected path. */
+function writtenValue(
+  at: DefaultIterator & { readonly method: string },
+  read: IteratorCapture,
+  error: ErrorValue,
+): boolean | undefined {
+  const { entries, method } = at;
+  if (method === DEFAULT_ITERATOR) return defaultIteratorValue(at, read, error);
+  if (at.set) return setValue(entries, method, read, error);
   const selected = mapValues(entries, method, read.keys);
   return selected?.values.some((each) => error(each, read.made, selected.keys)) === true
     ? true
     : undefined;
+}
+
+interface YieldedCollection {
+  readonly collection: NewExpression;
+  readonly source: ConstantSource;
+  readonly set: boolean;
+  readonly method: string;
+}
+
+/**
+ * Whether what a native collection's iterator yields at the selected path may be an Error, as its
+ * declared type admits one there (`framedDeclaredAdmitted`): a Set's element, a Map's key or value,
+ * or an entry's slot, as the construction's own arguments, else the annotation of a name it is
+ * read through, past local aliases, declare it. A whole entry, an array, is none.
+ */
+function yieldedAdmits(at: YieldedCollection, path: readonly string[]): boolean {
+  const { set } = at;
+  const iterated = set ? 'values' : 'entries';
+  const method = at.method === DEFAULT_ITERATOR ? iterated : at.method;
+  let index: number = set || method === 'keys' ? 0 : 1;
+  let keys = path;
+  if (method === 'entries') {
+    if (path[0] !== '0' && path[0] !== '1') return false;
+    index = set ? 0 : Number(path[0]);
+    keys = path.slice(1);
+  }
+  return framedDeclaredAdmitted(declaredCollection(at), set ? 'Set' : 'Map', index, keys);
+}
+
+/** A collection's own type arguments and the annotation of a name it is read through. */
+function declaredCollection(at: YieldedCollection): DeclaredCollection {
+  const annotation = [...at.source.bindings].find((binding) => binding.type !== undefined)?.type;
+  return { written: at.collection.typeArguments, annotation };
 }
 
 /** A quiet native add chain retains its Set receiver and first yielded insertion. */

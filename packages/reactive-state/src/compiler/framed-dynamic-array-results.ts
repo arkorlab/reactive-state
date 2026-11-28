@@ -3,6 +3,7 @@ import {
   type ElementAccessExpression,
   type Expression,
   isElementAccessExpression,
+  isSpreadElement,
   type SpreadElement,
 } from 'typescript/ast';
 
@@ -40,15 +41,33 @@ export function framedDynamicArrayResult(
   return selected ? true : undefined;
 }
 
-/** A native Set spread yields its values, and a native Map spread its entries' slots. */
+/**
+ * A native Set spread yields its values, and a native Map spread its entries' slots; a position
+ * before the spread that no earlier spread can shift takes none of them (`beforeSpread`).
+ */
 function collectionSpreadViews(
   spread: SpreadElement,
   array: ArrayLiteralExpression,
-  position: number,
+  position: number | undefined,
   keys: readonly string[],
 ): readonly ArrayElementView[] | undefined {
+  if (beforeSpread(spread, array, position)) return [];
   return (
     setSpreadViews(spread, array, position, keys) ?? mapSpreadViews(spread, array, position, keys)
+  );
+}
+
+/** A known position ahead of a spread, with no spread before it to shift the written elements. */
+function beforeSpread(
+  spread: SpreadElement,
+  array: ArrayLiteralExpression,
+  position: number | undefined,
+): boolean {
+  const offset = array.elements.indexOf(spread);
+  return (
+    position !== undefined &&
+    position < offset &&
+    array.elements.slice(0, offset).every((each) => !isSpreadElement(each))
   );
 }
 

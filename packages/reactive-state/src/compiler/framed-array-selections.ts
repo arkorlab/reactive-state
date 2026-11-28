@@ -34,6 +34,7 @@ import { arrayRestView, type ArrayElementView } from './framed-array-rest.ts';
 import { arrayMethodMayBeOverridden } from './framed-arrays.ts';
 import { asyncArrayFactoryViews } from './framed-async-array-factories.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { framedCopiedUnread } from './framed-copied-inputs.ts';
 import { asyncFoundElements } from './framed-find-results.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
@@ -45,6 +46,7 @@ import {
   literalKeyedReading,
   nestedArrayReadings,
 } from './framed-nested-selections.ts';
+import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedAssignedSources, framedPossibleBranch, reachedLoopRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
@@ -60,7 +62,7 @@ interface ElementProof {
   readonly spread?: (
     spread: SpreadElement,
     array: ArrayLiteralExpression,
-    position: number,
+    position: number | undefined,
     keys: readonly string[],
   ) => readonly ArrayElementView[] | undefined;
 }
@@ -224,7 +226,10 @@ function selectedIndex(argument: Expression | undefined): number | undefined {
   return constant === undefined ? undefined : Math.trunc(Number(constant)) || 0;
 }
 
-/** Literal positions remain exact; unknown positions retain every possible written element. */
+/**
+ * Literal positions remain exact; unknown positions retain every possible written element. Each
+ * source is read past quiet commas (`framedQuietOperand`).
+ */
 export function selectedError(
   receiver: Expression,
   index: number | undefined,
@@ -237,7 +242,7 @@ export function selectedError(
   }[] = [{ reading: { value: receiver, index }, ancestors: new Set<Node>() }];
   for (let branch = pending.pop(); branch !== undefined; branch = pending.pop()) {
     const { reading } = branch;
-    const value = unwrapped(reading.value);
+    const value = framedQuietOperand(reading.value);
     if (branch.ancestors.has(value)) continue;
     const sources: ElementReading[] = [];
     if (readingError({ ...reading, value }, { proof, pending: sources, read })) return true;
@@ -276,6 +281,7 @@ function insertedErrors(
   pending: ElementReading[],
 ): boolean {
   if (read === undefined) return false;
+  const { keys, copiedFrom } = reading;
   let written: ReturnType<typeof writtenArrayElements>;
   try {
     written = writtenArrayElements(reading.value, read, reading.index);
@@ -286,12 +292,12 @@ function insertedErrors(
   for (const source of written) {
     const element = source.value;
     if (source.array === true) {
-      pending.push({ value: element, index: undefined, keys: reading.keys });
+      pending.push({ value: element, index: undefined, keys, copiedFrom });
       continue;
     }
     if (source.keys.length === 0 && isSpreadElement(element))
-      pending.push({ value: element.expression, index: undefined, keys: reading.keys });
-    else if (proof.error(element, [...source.keys, ...(reading.keys ?? [])])) return true;
+      pending.push({ value: element.expression, index: undefined, keys, copiedFrom });
+    else if (proof.error(element, [...source.keys, ...(keys ?? [])])) return true;
   }
   return false;
 }
@@ -329,20 +335,22 @@ function literalError(
   return false;
 }
 
-/** A spread's source keeps every element possible; a known projection adds its values, read on by the keys. */
+/**
+ * A spread's source keeps every element possible, still followed for the `Array.from` the reading
+ * copies; a projection at the position, known or not, adds its values, read on by the keys.
+ */
 function spreadReadings(
   spread: SpreadElement,
   array: ArrayLiteralExpression,
   reading: ElementReading,
   proof: ElementProof,
 ): readonly ElementReading[] {
-  const readings: ElementReading[] = [
-    { value: spread.expression, index: undefined, keys: reading.keys },
-  ];
-  const { index } = reading;
-  if (index === undefined || index < (reading.start ?? 0) || index >= (reading.end ?? Infinity))
+  const { index, keys, copiedFrom } = reading;
+  const source = { value: spread.expression, index: undefined, keys, copiedFrom };
+  const readings: ElementReading[] = [source];
+  if (index !== undefined && (index < (reading.start ?? 0) || index >= (reading.end ?? Infinity)))
     return readings;
-  const projected = proof.spread?.(spread, array, index, reading.keys ?? []);
+  const projected = proof.spread?.(spread, array, index, keys ?? []);
   if (projected !== undefined) readings.push(...projected);
   return readings;
 }
@@ -520,8 +528,12 @@ function insideView(reading: ElementReading): boolean {
   );
 }
 
-/** One source reading retains its own bounds, copy time and original lexical nodes. */
+/**
+ * One source reading retains its own bounds, copy time and original lexical nodes; an input the
+ * compile cannot read whose declared element type admits an Error (`unread`) may hold one.
+ */
 function readingError(reading: ElementReading, context: ReadingContext): boolean {
+  if (reading.unread === true) return true;
   const packed = mapperRestReadingViews(reading);
   if (packed !== undefined) {
     context.pending.push(...packed);
@@ -560,6 +572,7 @@ function arrayReadingError(reading: ElementReading, context: ReadingContext): bo
   )
     return true;
   if (expandCopiedArray({ ...reading, value }, pending)) return false;
+  if (framedCopiedUnread({ ...reading, value })) return true;
   pending.push(...nestedArrayReadings({ ...reading, value }));
   if (typedError(value, reading, proof)) return true;
   if (insertedErrors({ ...reading, value }, reading.capture ?? read, proof, pending)) return true;

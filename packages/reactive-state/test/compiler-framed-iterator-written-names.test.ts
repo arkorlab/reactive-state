@@ -110,7 +110,12 @@ describe('the argument a collection source is built from, where its name is foll
 /**
  * What the reader of the first value a collection's default iterator yields answers for the words of
  * an `Error` the function was given. A name is followed only to a list that is written out, is a
- * constant, and is touched by nothing before the construction; any other name stays unread.
+ * constant, and is touched by nothing before the construction; any other name stays unread by that
+ * reader. An input the compile cannot read is read as what the declared type admits
+ * (`framedUnreadInput`: a Set's element, a Map's key or value), so for such a name (a list the
+ * function was given, a name that is not a constant, a list written to or given to a call before
+ * the construction or by a closure, a Map's entry that is a name) the rows below read the words of
+ * the `Error` and expect `true`, and the program is refused.
  */
 const READS = [
   {
@@ -167,27 +172,27 @@ const READS = [
     id: 'a-list-the-function-was-given',
     params: 'error: Error, input: Error[]',
     body: 'return new Set(input)[Symbol.iterator]().next().value!.stack;',
-    read: false,
+    read: true,
   },
   {
     id: 'a-name-that-is-not-a-constant',
     body: 'let input = [error]; return new Set(input)[Symbol.iterator]().next().value!.stack;',
-    read: false,
+    read: true,
   },
   {
     id: 'a-list-written-to-before-the-construction',
     body: 'const input = [error]; input.unshift(new Error("made")); return new Set(input)[Symbol.iterator]().next().value!.stack;',
-    read: false,
+    read: true,
   },
   {
     id: 'a-list-given-to-a-call-before-the-construction',
     body: 'const input = [error]; hooks(input); return new Set(input)[Symbol.iterator]().next().value!.stack;',
-    read: false,
+    read: true,
   },
   {
     id: 'a-list-written-to-by-a-closure-the-construction-may-follow',
     body: 'const input = [error]; const reverse = () => { input.reverse(); }; reverse(); return new Set(input)[Symbol.iterator]().next().value!.stack;',
-    read: false,
+    read: true,
   },
   {
     id: 'a-call-between-the-list-and-the-construction',
@@ -202,7 +207,7 @@ const READS = [
   {
     id: 'a-map-whose-entry-is-a-name',
     body: "const pair: [string, Error] = ['key', error]; const entries = [pair]; return new Map(entries)[Symbol.iterator]().next().value![1].stack;",
-    read: false,
+    read: true,
   },
   {
     id: 'a-weak-set-has-no-iterator',
