@@ -319,6 +319,63 @@ describe('a render through a connection whose transaction may still hold what wa
   );
 });
 
+describe('a render through a connection whose `DO` block set one for its transaction', () => {
+  it.each([
+    [['BEGIN', 'DO $$ BEGIN SET LOCAL search_path = other; END $$']],
+    [['BEGIN', "DO $$ BEGIN PERFORM set_config('search_path', 'other', true); END $$"]],
+    [['BEGIN', "DO 'BEGIN SET LOCAL search_path = other; END'"]],
+    [['BEGIN', "DO $$ BEGIN EXECUTE 'SET LOCAL search_path = other'; END $$"]],
+  ])(
+    'is refused while the transaction is open, after %j',
+    async (statements) => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofPool = await rendering(setup, setup.tracked);
+      const ofHeld = await rendering(setup, connection);
+
+      await expect(ofPool()).resolves.toContain('a,b');
+
+      for (const statement of statements) await connection.query(statement);
+
+      await expect(ofHeld()).rejects.toThrow(REFUSED);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    [['BEGIN', 'DO $$ BEGIN PERFORM 1; END $$']],
+    [['BEGIN', 'DO $$ BEGIN CREATE TEMP TABLE staged (id int) ON COMMIT DROP; END $$']],
+    [['BEGIN', "DO $$ BEGIN UPDATE tasks SET title = 'x' WHERE id = 'b'; END $$"]],
+  ])(
+    'is read after a block that sets none, %j',
+    async (statements) => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+
+      for (const statement of statements) await connection.query(statement);
+
+      await expect(ofHeld()).resolves.toContain('a,b');
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'is read after the transaction its block set one in ended',
+    async () => {
+      const setup = await pooled();
+      const connection = await held(setup);
+      const ofHeld = await rendering(setup, connection);
+      await connection.query('BEGIN');
+      await connection.query('DO $$ BEGIN SET LOCAL search_path = other; END $$');
+      await connection.query('COMMIT');
+
+      await expect(ofHeld()).resolves.toContain('a,b');
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
 describe('a render through a connection whose statements were queued without awaiting each', () => {
   it(
     'is refused after the transaction and its `SET LOCAL` were queued, as when each is awaited',
@@ -405,6 +462,17 @@ describe('the transaction-local settings a text leaves', () => {
     ['SELECT CASE WHEN true THEN 1 END', true, true],
     ['DO $$ BEGIN PERFORM 1; END $$', true, true],
     ['BEGIN', true, true],
+    ['DO $$ BEGIN SET LOCAL a = 1; END $$', false, true],
+    ["DO $$ BEGIN PERFORM set_config('a', 'b', true); END $$", false, true],
+    ["DO 'BEGIN SET LOCAL a = 1; END'", false, true],
+    ["DO $$ BEGIN EXECUTE 'SET LOCAL a = 1'; END $$", false, true],
+    ['DO $$ BEGIN PERFORM 1; END $$', false, false],
+    ['DO $$ BEGIN CREATE TABLE IF NOT EXISTS staged (id int); END $$', false, false],
+    ['DO $$ BEGIN SET LOCAL a = 1; END $$; COMMIT', false, false],
+    ['COMMIT; DO $$ BEGIN SET LOCAL a = 1; END $$', true, true],
+    ["SELECT 'a'; DO $$ BEGIN PERFORM 1; END $$", false, false],
+    ["SELECT 'a'; DO $$ BEGIN SET LOCAL a = 1; END $$", false, true],
+    ["DO LANGUAGE 'plpgsql' $$ BEGIN PERFORM 1; END $$", false, false],
   ])('reads `%s` of %j as %j', (sql, before, after) => {
     expect(scopedAfter(sql, true, before).ran).toBe(after);
   });
