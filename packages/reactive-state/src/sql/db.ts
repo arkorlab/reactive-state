@@ -1,10 +1,11 @@
 import { mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
+import type { DrizzleD1Database } from 'drizzle-orm/d1';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import type { Client as PgClient, ClientConfig } from 'pg';
 
-import { type DatabaseHost, hostDatabase, hostOf } from '../authority/database-host.ts';
+import { type DatabaseHost, hostDatabase, hostOf, LOG } from '../authority/database-host.ts';
 import { describeThrown, messageOf } from '../authority/errors.ts';
 import { TAIL } from '../authority/external.ts';
 import { type AnyDatabase, type Database, database } from '../server/schema.ts';
@@ -12,19 +13,29 @@ import { logOf, seededSql } from './capture.ts';
 import { codeOf } from './client-plans.ts';
 import { checkServer } from './compat.ts';
 import type { Queryable } from './digest.ts';
-import { type DrizzleFollow, followDrizzle, type FollowDrizzleOptions } from './index.ts';
+import {
+  type DrizzleFollow,
+  followDrizzle,
+  type FollowDrizzleOptions,
+  type OfSqlite,
+} from './index.ts';
+import { publishedD1 } from './sqlite/bound-d1.ts';
+import type { D1Binding } from './sqlite/client.ts';
+import { d1Hosted } from './sqlite/d1-host.ts';
+import type { DrizzleD1Follow } from './sqlite/follow.ts';
+import { inSqliteFile } from './sqlite/host.ts';
 
 /**
  * An application's database in one call, of its Drizzle schema: `DATABASE_URL`'s server through a
- * `pg.Pool`, or of none PGlite in this process. What it answers is what the application reads and
- * writes with; the authority it is given to does all else as it starts (`DatabaseHost`). A module of
- * its own, as `./drizzle` is bundled for Workers, which have neither.
+ * `pg.Pool`, or of none PGlite in this process; of a schema of SQLite's tables, D1's, the D1 a
+ * deployment publishes to its Function, or of none a file in D1's shape (`sqlite/host.ts`). What it
+ * answers is what the application reads and writes with; the authority it is given to does all
+ * else as it starts (`DatabaseHost`). A module of its own, as `./drizzle` is bundled for Workers,
+ * which have neither; a Worker's `./db` is `../cloudflare/db.ts`.
  */
 
 /** Where PGlite keeps a database between runs. */
 const PGLITE_DIR = '.data/pglite';
-/** How long the change log keeps an entry: a follower further behind renders everything again. */
-const LOG = { keptMs: 3_600_000 } as const;
 /** The SQLSTATE of a role that may not do what it asked. */
 const PRIVILEGE = '42501';
 /**
@@ -43,10 +54,21 @@ const EXTENDED_STEP = 256;
 const OWNER_RUNS =
   'the statements of `followDrizzle(schema).captureSql()` as the role that owns the tables';
 
-/** What `reactiveDb` answers: what reads and writes the tables, and what the authority is given. */
+/** What `reactiveDb` takes beside the schema: `followDrizzle`'s options, and the D1 of several. */
+export interface ReactiveDbOptions extends FollowDrizzleOptions {
+  /** The binding of the application's D1, where a deployment has several: of one, that one. */
+  readonly binding?: string;
+}
+
+/**
+ * What `reactiveDb` answers: what reads and writes the tables, of PostgreSQL's Drizzle or of D1's as
+ * the schema is, and what the authority is given.
+ */
 export interface ReactiveDb<S extends Readonly<Record<string, unknown>>> {
-  readonly orm: PgDatabase<PgQueryResultHKT, S>;
-  readonly db: Database<DrizzleFollow<S>['tables']>;
+  readonly orm: OfSqlite<S> extends true ? DrizzleD1Database<S> : PgDatabase<PgQueryResultHKT, S>;
+  readonly db: Database<
+    (OfSqlite<S> extends true ? DrizzleD1Follow<S> : DrizzleFollow<S>)['tables']
+  >;
 }
 
 /** A connection of `pg`'s, or of PGlite's, as the host reads and writes the log through it. */
@@ -230,13 +252,11 @@ async function inProcess<S extends Readonly<Record<string, unknown>>>(
         await pg.listen(follow.channel, told);
       },
       migrate: (migrationsFolder) => migrator.migrate(orm, { migrationsFolder }),
-      open: async () => {
-        await capture(pg, follow);
-        return { [follow.storeName]: follow.store(pg) };
-      },
+      open: () => capture(pg, follow),
       prune: () => follow.prune(pg, Date.now() - LOG.keptMs),
       alone: (work) => work(),
       seed: (first) => seedOnce(pg, follow, first),
+      stores: () => ({ [follow.storeName]: follow.store(pg) }),
     },
     orm,
   };
@@ -342,12 +362,41 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
       open: async () => {
         await checkServer(queryable);
         await capture(queryable, follow);
-        return { [follow.storeName]: follow.store(reads) };
       },
       prune: () => follow.prune(queryable, Date.now() - LOG.keptMs),
       seed: (first) => seedOnce(queryable, follow, first),
+      stores: () => ({ [follow.storeName]: follow.store(reads) }),
     },
     orm,
+  };
+}
+
+/**
+ * A deployment's D1, as its runtime publishes it to the Function: what the application's Drizzle
+ * reads and writes there. Its authority is the Durable Object, of a binding of its own
+ * (`../cloudflare/db.ts`), so what a host of Node's runs before an authority starts, it refuses.
+ */
+async function onPublishedD1<S extends Readonly<Record<string, unknown>>>(
+  binding: D1Binding,
+  schema: S,
+  follow: DrizzleD1Follow<S>,
+): Promise<Connected<S>> {
+  const { drizzle } = await import('drizzle-orm/d1');
+  const refused = (): Promise<never> => {
+    return Promise.reject(
+      new Error("A deployment's D1 is migrated and seeded by its own deploy, not by its Function."),
+    );
+  };
+  return {
+    host: {
+      ...d1Hosted(binding, follow, LOG.keptMs),
+      alone: (work) => work(),
+      close: () => Promise.resolve(),
+      listen: () => Promise.resolve(),
+      migrate: refused,
+      seed: refused,
+    },
+    orm: drizzle(follow.client(binding) as never, { schema }),
   };
 }
 
@@ -357,20 +406,28 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
  */
 export async function reactiveDb<S extends Readonly<Record<string, unknown>>>(
   schema: S,
-  options: FollowDrizzleOptions = {},
+  options: ReactiveDbOptions = {},
 ): Promise<ReactiveDb<S>> {
-  const follow = followDrizzle(schema, options) as unknown as DrizzleFollow<S>;
+  const { binding: name, ...followed } = options;
+  const follow = followDrizzle(schema, followed) as unknown as
+    | DrizzleFollow<S>
+    | DrizzleD1Follow<S>;
   if (!('channel' in follow)) {
-    throw new TypeError(
-      "reactiveDb(): a schema of SQLite's tables is D1's, which a Worker's binding opens: follow it with `followDrizzle`.",
-    );
+    const published = publishedD1(name);
+    const connected =
+      published === undefined
+        ? await inSqliteFile(schema, follow, LOG.keptMs)
+        : await onPublishedD1(published, schema, follow);
+    const db = database(follow.tables);
+    hostDatabase(db, connected.host);
+    return { db, orm: connected.orm } as unknown as ReactiveDb<S>;
   }
   const url = process.env['DATABASE_URL'];
   const connected =
     url === undefined ? await inProcess(schema, follow) : await onServer(url, schema, follow);
-  const db = database<DrizzleFollow<S>['tables']>(follow.tables);
+  const db = database(follow.tables);
   hostDatabase(db, connected.host);
-  return { db, orm: connected.orm as ReactiveDb<S>['orm'] };
+  return { db, orm: connected.orm } as unknown as ReactiveDb<S>;
 }
 
 /** Runs the application's migrations in `folder` on `db`, of `reactiveDb`, before its authority starts. */

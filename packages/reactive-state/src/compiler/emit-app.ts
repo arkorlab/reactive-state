@@ -416,6 +416,24 @@ export function emitRegistry(input: AppInput): string {
 }
 
 /**
+ * The authority's Durable Object of the application (`durable-object.mjs`), for a host that
+ * registers the compile's own: the class `ReactiveAuthority`, of its registry alone, as the
+ * application's database opens its own D1 (`reactiveDb`). JavaScript, which the application's
+ * TypeScript reads not, as it knows no `cloudflare:workers`.
+ */
+export function emitDurableObject(): string {
+  return [
+    header(APPLICATION, 'components'),
+    "import { authorityObject } from '@arkorlab/reactive-state/cloudflare';",
+    '',
+    "import * as application from './authority.mts';",
+    '',
+    'export const ReactiveAuthority = authorityObject(application);',
+    '',
+  ].join('\n');
+}
+
+/**
  * The route a page follows its roots by and signs in with, and a route middleware's route is
  * delivered at (`<app>/api/reactive-state/[...path]/route.ts`, at `file`): handed the host's
  * registry of the routes and their envelopes (`<out>/routes.ts`), and a handler for each method a

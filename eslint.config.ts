@@ -496,6 +496,7 @@ export default defineConfig([
       'packages/reactive-state/src/next/{adapter,compile-on-build,config}.ts',
       'packages/reactive-state/src/cli/**/*.ts',
       'packages/reactive-state/src/sql/db.ts',
+      'packages/reactive-state/src/sql/sqlite/{host,local-d1}.ts',
       'packages/reactive-state/test/**/*.{ts,tsx}',
       'examples/*/scripts/**/*.mts',
     ],

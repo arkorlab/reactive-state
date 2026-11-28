@@ -397,6 +397,7 @@ export class SiteDelivery {
       // Nothing is armed again: a site and a token come with a new version of the object, which
       // starts behind, and arms its own alarm (`resume`).
       writeMeta(this.#sql, META.disabled, site.reason);
+      await this.#letGoUntold();
       return;
     }
     deleteMeta(this.#sql, META.disabled);
@@ -412,6 +413,24 @@ export class SiteDelivery {
       this.#arm(Date.now() + this.#delayMs);
     }
     this.#armOwedRetry();
+  }
+
+  /**
+   * Of an object that knows no site, takes what no site would be told of, read after read of the
+   * log: a change that publishes no record, as none of an application's tables of none public does,
+   * would else be kept for good. One that publishes waits for a site, as what is after it does.
+   */
+  async #letGoUntold(): Promise<void> {
+    for (;;) {
+      const changes = await this.#engine.changes(await this.#engine.delivery(CONSUMER));
+      const told = changes.find((change) => change.published.length > 0)?.revision;
+      const untold =
+        told === undefined ? changes : changes.filter(({ revision }) => revision < told);
+      const latest = untold.at(-1)?.revision;
+      if (latest !== undefined) await this.#engine.acknowledge(CONSUMER, latest);
+      // Of a change that publishes, or of the log's end.
+      if (latest === undefined || told !== undefined) return;
+    }
   }
 
   async #deliverChanges(site: Site): Promise<void> {

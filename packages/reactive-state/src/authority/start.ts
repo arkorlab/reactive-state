@@ -161,7 +161,8 @@ export async function startAuthority(options: AuthorityOptions): Promise<Authori
   const host = takeHost(options.database);
   if (host === undefined) return started(options, token, filename, host);
   try {
-    const stores = { ...(await host.open()), ...options.stores };
+    await host.open();
+    const stores = { ...host.stores(), ...options.stores };
     return await started({ ...options, stores }, token, filename, host);
   } catch (error) {
     await host.close();

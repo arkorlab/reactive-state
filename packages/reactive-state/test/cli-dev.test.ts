@@ -4,8 +4,10 @@ import path from 'node:path';
 
 import { sql } from 'drizzle-orm';
 import { pgTable, text } from 'drizzle-orm/pg-core';
+import { sqliteTable, text as sqliteText } from 'drizzle-orm/sqlite-core';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
+import { hostOf } from '../src/authority/database-host.ts';
 import { prepare } from '../src/cli/prepare.ts';
 import { projectOfLoader } from '../src/next/config.ts';
 import { database, table, text as textField } from '../src/server/index.ts';
@@ -219,6 +221,34 @@ describe('what a development start prepares', () => {
 
     expect(seeded).toHaveBeenCalledTimes(2);
   });
+
+  it(
+    "runs the migrations and the seed once of a schema of SQLite's tables, D1's",
+    async () => {
+      const kept = process.env['D1_FILE'];
+      process.env['D1_FILE'] = ':memory:';
+      onTestFinished(() => {
+        if (kept === undefined) delete process.env['D1_FILE'];
+        else process.env['D1_FILE'] = kept;
+      });
+      const d1Tasks = sqliteTable('tasks', {
+        id: sqliteText().primaryKey(),
+        title: sqliteText().notNull(),
+      });
+      const { db, orm } = await reactiveDb({ tasks: d1Tasks });
+      onTestFinished(() => hostOf(db)?.close());
+      const { root, seeded, src } = seedOf(() =>
+        orm.insert(d1Tasks).values({ id: 'a', title: 'one' }),
+      );
+
+      await prepare(db, root, src);
+      await prepare(db, root, src);
+
+      expect(seeded).toHaveBeenCalledTimes(1);
+      await expect(orm.select().from(d1Tasks)).resolves.toStrictEqual([{ id: 'a', title: 'one' }]);
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   it('says so of a seed that exports none to run', async () => {
     const db = database({ notes: table({ body: textField() }) });

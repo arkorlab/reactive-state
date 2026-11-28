@@ -20,6 +20,7 @@ import {
   type AppInput,
   type CompiledComponent,
   emitElements,
+  emitDurableObject,
   emitRegistry,
   emitRoot,
   emitRoute,
@@ -457,6 +458,7 @@ function emitAll(emitting: Emitting): Map<string, string> {
   put(path.join(outDir, 'elements.ts'), emitElements(app));
   put(path.join(outDir, 'server-functions.ts'), emitServerFunctions(session !== undefined));
   put(path.join(outDir, 'authority.mts'), emitRegistry(app));
+  put(path.join(outDir, 'durable-object.mjs'), emitDurableObject());
   const routing = app.routing ?? NO_ROUTING;
   // Held against every output before them, and nothing against them: both of two routes that differ
   // in case alone are written, and nothing put after them is named under `middleware/`.

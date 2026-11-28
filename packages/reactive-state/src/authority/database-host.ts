@@ -8,8 +8,13 @@ import type { ExternalStores } from './external.ts';
  * the compile hands the authority the application's export as it is.
  */
 export interface DatabaseHost {
-  /** Makes what the database's changes are followed by, and answers the stores that read it. */
-  readonly open: () => Promise<ExternalStores>;
+  /** Makes what the database's changes are followed by: the log, and each table's triggers. */
+  readonly open: () => Promise<void>;
+  /**
+   * The stores that read the database, which an authority is made of at once, as a Durable Object's
+   * is in its constructor: what they read is there once `open` ended.
+   */
+  readonly stores: () => ExternalStores;
   /** Has `told` called as each change commits. */
   readonly listen: (told: () => void) => Promise<void>;
   /** Discards what the database keeps of changes past following. */
@@ -22,6 +27,9 @@ export interface DatabaseHost {
   readonly alone: (work: () => Promise<void>) => Promise<void>;
   readonly close: () => Promise<void>;
 }
+
+/** How long a host's change log keeps an entry: a follower further behind renders everything again. */
+export const LOG = { keptMs: 3_600_000 } as const;
 
 /** Where the hosts are kept, on `globalThis`: the authority may be of another copy of this module. */
 const HOSTS = Symbol.for('arkorlab.reactive-state.database-hosts');

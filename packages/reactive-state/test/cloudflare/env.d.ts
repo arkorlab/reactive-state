@@ -14,6 +14,16 @@ declare global {
       readonly EXTERNAL_AUTHORITY: DurableObjectNamespace<AuthorityObject>;
       /** The object whose states bind rows of the application's D1. */
       readonly D1_ROWS_AUTHORITY: DurableObjectNamespace<AuthorityObject>;
+      /** The object of the test application that knows no site (`SitelessAuthority`). */
+      readonly SITELESS: DurableObjectNamespace<AuthorityObject>;
+      /** The object of an application of one call (`ZeroConfigAuthority`). */
+      readonly ZERO_CONFIG: DurableObjectNamespace<AuthorityObject>;
+      /** The same, of a log that takes a while to make (`SlowStartAuthority`). */
+      readonly SLOW_START: DurableObjectNamespace<AuthorityObject>;
+      /** The same, of a log whose making never ends (`HungStartAuthority`). */
+      readonly HUNG_START: DurableObjectNamespace<AuthorityObject>;
+      /** The same, whose storage fails to arm its first alarm as it starts (`ArmFailsAuthority`). */
+      readonly ARM_FAILS: DurableObjectNamespace<AuthorityObject>;
       /** The application's own D1, with trigger-based change capture. */
       readonly REACTIVE_D1: D1Database;
     }
