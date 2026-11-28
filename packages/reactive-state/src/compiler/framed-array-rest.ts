@@ -1,4 +1,5 @@
 import {
+  type CallExpression,
   type Expression,
   isArrayBindingPattern,
   isBindingElement,
@@ -27,6 +28,26 @@ export interface ArrayElementView {
   };
   /** Only the written annotation of the value is read, none of its initializer or writes. */
   readonly typeOnly?: boolean;
+  /**
+   * A collection's input the compile cannot read, whose declared element type admits an Error
+   * (`framedMemberAdmitted`): the element may be one.
+   */
+  readonly unread?: boolean;
+  /**
+   * The native `Array.from` whose source the reading follows: one no array reader reads may hold
+   * an Error where the declared element type admits one (`framedCopiedUnread`).
+   */
+  readonly copiedFrom?: CopiedFrom | undefined;
+}
+
+/**
+ * The native `Array.from` a reading copies for, and how many of the reading's leading keys select
+ * the copied element out of arrays it is read from: `groups` of `Array.from(groups[0])` is read on
+ * by the element's index first.
+ */
+interface CopiedFrom {
+  readonly call: CallExpression;
+  readonly depth: number;
 }
 
 /**

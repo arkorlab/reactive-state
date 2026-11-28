@@ -35,6 +35,7 @@ import { literalSpecifier } from './load-specifiers.ts';
 import { moduleFile, type ModuleResolution } from './module-resolutions.ts';
 import { browserMapped, packageFiles, type Side } from './packages.ts';
 import { unsettledIn } from './settled.ts';
+import { TypeSession } from './type-checker.ts';
 import { checkSyntax, isScript, parseModule } from './typescript.ts';
 
 /**
@@ -160,10 +161,14 @@ export class Modules implements Disposable {
   #cycled = false;
   /** What makes each shared file answer otherwise as it runs, read once: none of a settled one. */
   readonly #unsettled = new Map<string, { readonly reason: string | undefined }>();
+  /** The compile's programs, which the checker reads the modules' declared types in. */
+  readonly #types: TypeSession;
 
-  constructor(api: API, srcDir: string) {
+  /** `outDir`, where given, is where the compile writes: none of it is an input of the checker's. */
+  constructor(api: API, srcDir: string, outDir?: string) {
     this.#api = api;
     this.#srcDir = srcDir;
+    this.#types = this.#stack.use(new TypeSession(api, outDir));
   }
 
   /** What a module of no directive is, by what it imports and what it holds. */
@@ -231,6 +236,14 @@ export class Modules implements Disposable {
     this.#stack.dispose();
   }
 
+  /**
+   * Every file the checker's programs read that no module of the compile's is, by its path, with
+   * its text: none where the compile asked the checker nothing.
+   */
+  typeReads(): ReadonlyMap<string, string> {
+    return this.#types.reads();
+  }
+
   /** Every file the compile has read, by its path, with its text. */
   sources(): ReadonlyMap<string, string> {
     return new Map([...this.#parsed].map(([file, parsed]) => [file, parsed.text]));
@@ -263,7 +276,7 @@ export class Modules implements Disposable {
     let parsed = this.#parsed.get(file);
     if (parsed === undefined) {
       const text = readFileSync(file, 'utf8');
-      const lease = this.#stack.use(parseModule(this.#api, file, text));
+      const lease = this.#stack.use(parseModule(this.#api, file, text, this.#types));
       parsed = { file, name: this.nameOf(file), sourceFile: lease.sourceFile, text };
       this.#parsed.set(file, parsed);
     }

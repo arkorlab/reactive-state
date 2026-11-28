@@ -4,12 +4,9 @@ import {
   type Expression,
   type Identifier,
   isBinaryExpression,
-  isBlock,
   isCallExpression,
   isElementAccessExpression,
-  isExpressionStatement,
   isIdentifier,
-  isIfStatement,
   isPropertyAccessExpression,
   isVariableDeclaration,
   type NewExpression,
@@ -25,6 +22,7 @@ import { framedOwnMethod, framedReceiverDispatch } from './framed-at-methods.ts'
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
+import { definiteBefore } from './framed-map-order.ts';
 import {
   framedStoredValues,
   framedUnprovenValues,
@@ -32,7 +30,7 @@ import {
   type MapWrite,
 } from './framed-map-stores.ts';
 import { framedNativeArguments, framedUnresolvedCall } from './framed-native-arguments.ts';
-import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
+import { framedNativeConstructor } from './framed-sources.ts';
 import { weakMapWritesQuiet } from './framed-weak-map-guards.ts';
 import { framedMutationKey } from './framed-weak-map-keys.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
@@ -266,6 +264,17 @@ export function framedMapChain(
     if (!native.certain) certain = false;
   }
   return { possible: true, certain };
+}
+
+/**
+ * The own sets a chain of one set surely runs there instead of the native one (`nativeMethod`):
+ * each the file may give the Map. None where the native set may run, or the chain is longer.
+ */
+export function framedMapChainSets(selected: MapSource, identity: MapIdentity): Expression[] {
+  const [call, ...inner] = selected.sets;
+  if (call === undefined || inner.length > 0 || framedMapSet(call)?.borrowed !== false) return [];
+  if (nativeMethod(call, 'set', selected, identity).possible) return [];
+  return methodAssignments(call, 'set', selected, identity).map(({ node }) => node.right);
 }
 
 /**
@@ -534,27 +543,6 @@ function modeledUse(
   }
   const source = isCallExpression(parent) ? framedMapSet(parent) : undefined;
   return source !== undefined && unwrapped(source.receiver) === unwrapped(node);
-}
-
-/** The same lexical owner and source-proven selected if arms establish an executed prefix. */
-function definiteBefore(node: Node, read: Node, owner: Node): boolean {
-  if (executionOwner(node) !== owner || node.end > read.pos || !isExpressionStatement(node.parent))
-    return false;
-  let within: Node = node.parent;
-  for (;;) {
-    const parent = within.parent;
-    if (parent === owner) return true;
-    if (isBlock(parent)) {
-      within = parent;
-      continue;
-    }
-    if (!isIfStatement(parent)) return false;
-    const condition = framedCondition(parent.expression);
-    if (condition === undefined) return false;
-    const chosen: Node | undefined = condition ? parent.thenStatement : parent.elseStatement;
-    if (within !== chosen) return false;
-    within = parent;
-  }
 }
 
 /** Later same-owner writes matter only for a repeated read or a map captured between calls. */

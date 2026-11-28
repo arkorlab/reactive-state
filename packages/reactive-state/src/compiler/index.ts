@@ -122,6 +122,9 @@ function readsOf(modules: Modules): ReadonlyMap<string, string> {
   for (const [file, text] of modules.configurations()) {
     reads.set(file, text);
   }
+  for (const [file, text] of modules.typeReads()) {
+    if (!reads.has(file)) reads.set(file, text);
+  }
   return rememberModuleResolutions(reads, modules.resolutions());
 }
 
@@ -169,7 +172,7 @@ function compileWith(api: API, options: CompileOptions): Compiled {
   const srcDir = realDirectory(options.srcDir);
   const outDir = path.resolve(options.outDir);
   const appDir = path.resolve(options.appDir);
-  using modules = new Modules(api, srcDir);
+  using modules = new Modules(api, srcDir, outDir);
   const hooks = new HookModules(modules);
   const refusals: ReactiveCompileError[] = [];
   const attempt = <T>(run: () => T): T | undefined => {
