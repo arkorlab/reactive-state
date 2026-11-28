@@ -171,7 +171,10 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
   };
   /** Whether a statement of this checked-out connection changed its settings beyond a transaction. */
   let changed = false;
-  /** Whether a statement of it set a setting for its transaction, which may be open still. */
+  /**
+   * Whether it holds a setting for its transaction, which a statement set and none has ended: a
+   * statement that ends a transaction lets go of it as it goes, in whatever form it is written.
+   */
   let scoped = false;
   /** Whether a setting of this connection's differs from those the plans of the pool were asked under. */
   const unplanned = (): boolean => {
@@ -215,6 +218,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       statement !== undefined &&
       TRANSACTION.some((form) => form.test(statement.text))
     ) {
+      scoped = plans.scopedAfter(statement.text, scoped);
       return called(connection, 'query', statement.run);
     }
     let noted: ReturnType<typeof tableReads>;
@@ -235,7 +239,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     const text = textOf(first);
     if (checkedOut && typeof text === 'string') {
       if (plans.leavesSession(text)) changed = true;
-      else if (plans.changesOneSession(text)) scoped = true;
+      scoped = plans.scopedAfter(text, scoped);
     }
     if (!checkedOut && typeof text === 'string' && plans.changesOneSession(text)) {
       return sessionRefused(first, rest, text);
