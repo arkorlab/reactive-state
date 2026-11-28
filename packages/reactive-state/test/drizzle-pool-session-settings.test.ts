@@ -527,6 +527,28 @@ describe('a `DO` block whose code the lexer reads as a string', () => {
       false,
     ],
     ['SELECT $$ SET search_path = other $$ AS note', false, false],
+    // A code in a string of its own is not read, and may do any of them.
+    ["DO 'BEGIN SET search_path = other; END'", true, true],
+    ["DO 'BEGIN PERFORM 1; END'", true, true],
+    ["DO 'BEGIN PERFORM 1; END' LANGUAGE plpgsql", true, true],
+    // What stands in a text beside a block is no code of it.
+    ["SELECT 'a'; DO $$ BEGIN PERFORM 1; END $$", false, false],
+    ["DO $$ BEGIN PERFORM 1; END $$; SELECT 'a'", false, false],
+    [
+      "INSERT INTO tasks VALUES ('x', 'y'); DO $$ BEGIN SET search_path = other; END $$",
+      true,
+      true,
+    ],
+    ["DO LANGUAGE 'plpgsql' $$ BEGIN PERFORM 1; END $$", false, false],
+    ['DO $$ BEGIN PERFORM 1; END $$ LANGUAGE plpgsql', false, false],
+    // Honest blocks: DDL, rows.
+    ['DO $$ BEGIN CREATE TABLE IF NOT EXISTS staged (id int); END $$', false, false],
+    [
+      "DO $$ BEGIN INSERT INTO tasks VALUES ('x', 'y') ON CONFLICT DO NOTHING; END $$",
+      false,
+      false,
+    ],
+    ["DO $$ BEGIN EXECUTE 'CREATE TABLE staged (id int)'; END $$", false, true],
   ])(
     'is read: `%s`, of the session %j, beyond its transaction %j',
     (statement, changes, leaves) => {
@@ -543,6 +565,12 @@ describe('a `DO` block whose code the lexer reads as a string', () => {
       await expect(tracked.query("DO $$ BEGIN SET application_name = 'x'; END $$")).rejects.toThrow(
         /one connection/u,
       );
+      await expect(tracked.query("DO 'BEGIN SET application_name = ''x''; END'")).rejects.toThrow(
+        /one connection/u,
+      );
+      await expect(
+        tracked.query("DO $$ BEGIN EXECUTE 'CREATE TABLE staged (id int)'; END $$"),
+      ).resolves.toBeDefined();
       await expect(tracked.query('DO $$ BEGIN PERFORM 1; END $$')).resolves.toBeDefined();
       await expect(
         tracked.query("DO $$ BEGIN UPDATE tasks SET title = 'y' WHERE id = 'a'; END $$"),
@@ -565,6 +593,23 @@ describe('a `DO` block whose code the lexer reads as a string', () => {
 
       await checkedOut(tracked, async (held) => {
         await held.query("DO $$ BEGIN SET application_name = 'x'; END $$");
+      });
+
+      expect(pool.totalCount).toBe(0);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    ["DO 'BEGIN SET application_name = ''x''; END'"],
+    ["DO $$ BEGIN EXECUTE 'SET application_name = ''x'''; END $$"],
+  ])(
+    'closes a connection given back after `%s`, whose code is not read or is built as it runs',
+    async (statement) => {
+      const { pool, tracked } = await pooled();
+
+      await checkedOut(tracked, async (held) => {
+        await held.query(statement);
       });
 
       expect(pool.totalCount).toBe(0);
