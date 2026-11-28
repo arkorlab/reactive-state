@@ -37,6 +37,7 @@ import {
 import { constantKeys, framedKeyNames, TARGET_WRITES } from './framed-key-names.ts';
 import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { framedQuietCallee, framedQuietValue } from './framed-quiet-values.ts';
+import { storedRange, tupleEntry } from './framed-tuple-entries.ts';
 import {
   APPLICATION_WORK,
   callWorkExposure,
@@ -45,7 +46,6 @@ import {
   tupleBindingExposure,
 } from './framed-tuple-work.ts';
 import { framedPossibleBranch, repeatedBodyRead, repeatedFrameRead } from './framed-writes.ts';
-import { type Constant, constantValue } from './numbers.ts';
 
 export { framedKeyNames } from './framed-key-names.ts';
 
@@ -445,17 +445,12 @@ function tupleWriteBefore(
   return false;
 }
 
-/** The arguments of the array methods that store a value in it, by the range of each that is stored. */
-const STORING: ReadonlyMap<string, readonly [number, number]> = new Map([
-  ['fill', [0, 1]],
-  ['push', [0, Infinity]],
-  ['splice', [2, Infinity]],
-  ['unshift', [0, Infinity]],
-]);
-
 /**
  * What a call of `push`, `unshift`, `splice` or `fill` on the same lexical tuple or resolved constant
- * alias stores in it: each argument it names, no spread of a list the compile cannot read.
+ * alias stores in it: each argument it names, past the ones the method takes for other things, read
+ * after the arguments it spreads from a list written in place or a constant's are expanded
+ * (`expandedArguments`). What stands past a spread of a list the compile cannot read is at no known
+ * position, and so may be stored.
  */
 function storedEntries(
   call: CallExpression,
@@ -464,44 +459,42 @@ function storedEntries(
   const member = unwrapped(call.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
   const name = frameMemberName(member);
-  const range = name === undefined ? undefined : STORING.get(name);
+  const range = name === undefined ? undefined : storedRange(name);
   const holder = unwrapped(member.expression);
   const selected = isIdentifier(holder) ? frameBindingOf(holder) : undefined;
   if (range === undefined || selected?.keys.length !== 0 || !aliases.has(selected.binding))
     return [];
-  return call.arguments.slice(range[0], range[1]).filter((each) => !isSpreadElement(each));
-}
-
-/** The last canonical index of an array: a larger number, or any other name, is no entry's. */
-const ARRAY_INDEX = { last: 4_294_967_294 } as const;
-
-/**
- * Whether a written index may name an entry of an array: one the compile cannot tell, or a canonical
- * one.
- */
-function entryIndex(index: Constant | undefined): boolean {
-  if (index === undefined) return true;
-  const text = String(index);
-  return /^(?:0|[1-9]\d*)$/u.test(text) && Number(text) <= ARRAY_INDEX.last;
+  const given = expandedArguments(call);
+  return [...given.placed.slice(range[0], range[1]), ...given.unplaced];
 }
 
 /**
- * Only slot zero of the same lexical tuple or resolved constant alias supplies its receiver; any
- * entry of it, whatever index names it, may supply a value of it, and no property it is given under
- * another name (`sources['meta']`), which a spread of the array never yields.
+ * The arguments of a call with each spread of a list written in place, or of a constant's, replaced
+ * by its elements: those up to the first spread of a list the compile cannot read, at known
+ * positions, and those past it, at none. The lists are read as written, without asking whether other
+ * code has changed them, which would ask for this call's own writes.
  */
-function tupleEntry(
-  target: Expression,
-  aliases: ReadonlySet<FrameBinding>,
-  entries: 'any' | 'first',
-): boolean {
-  const value = unwrapped(target);
-  if (!isElementAccessExpression(value)) return false;
-  const index = constantValue(value.argumentExpression);
-  if (entries === 'first' ? index !== 0 && index !== '0' : !entryIndex(index)) return false;
-  const holder = unwrapped(value.expression);
-  const selected = isIdentifier(holder) ? frameBindingOf(holder) : undefined;
-  return selected?.keys.length === 0 && aliases.has(selected.binding);
+function expandedArguments(call: CallExpression): {
+  readonly placed: readonly Expression[];
+  readonly unplaced: readonly Expression[];
+} {
+  const placed: Expression[] = [];
+  const unplaced: Expression[] = [];
+  let open = false;
+  const pending: ArgumentWork[] = [];
+  for (const node of call.arguments) pending.unshift({ node, seen: new Set() });
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (isOmittedExpression(each.node)) continue;
+    if (!isSpreadElement(each.node)) {
+      (open ? unplaced : placed).push(each.node);
+      continue;
+    }
+    const list = argumentArray(each.node.expression, each.seen, call, true);
+    if (list === undefined) open = true;
+    else
+      for (const node of list.array.elements.toReversed()) pending.push({ node, seen: list.seen });
+  }
+  return { placed, unplaced };
 }
 
 /**

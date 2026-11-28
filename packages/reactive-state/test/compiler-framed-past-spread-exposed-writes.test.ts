@@ -139,6 +139,48 @@ const CASES: readonly Case[] = [
     source: `function frames(error:Error,...unread:object[]){void error;${BOX}const sources:object[]=[{other:1}];const other:object[]=[];other.push({inner:error});Object.assign(box,...unread,...sources);return box.inner?.stack;}`,
     refused: false,
   },
+  // The arguments a method is given are those of the lists it spreads that are written in place or a
+  // constant's, read before the method's own arguments are told from the others.
+  {
+    id: 'past-unread-spread-entry-pushed-from-a-literal-list',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1}];sources.push(...[{inner:error}]);Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-pushed-from-a-constant-list',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const extra:object[]=[{inner:error}];const sources:object[]=[{other:1}];sources.push(...extra);Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-spliced-in-after-spread-counts',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1},{other:2}];sources.splice(...([1,0] as const),{inner:error});Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-spliced-in-from-a-literal-list',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1},{other:2}];sources.splice(1,0,...[{inner:error}]);Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-pushed-after-an-unread-list',
+    source: `function frames(error:Error,more:object[],...unread:object[]){${BOX}const sources:object[]=[{other:1}];sources.push(...more,{inner:error});Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-pushed-from-itself',
+    source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{inner:error}];sources.push(...sources);Object.assign(box,...unread,...sources);${READ}}`,
+    refused: true,
+  },
+  {
+    id: 'past-unread-spread-entry-unshifted-from-a-literal-list-data',
+    source: `function frames(error:Error,...unread:object[]){void error;${BOX}const sources:object[]=[{other:1}];sources.unshift(...[{inner:{stack:'fixed'}}]);Object.assign(box,...unread,...sources);${READ}}`,
+    refused: false,
+  },
+  {
+    id: 'past-unread-spread-entries-removed-through-spread-counts-data',
+    source: `function frames(error:Error,...unread:object[]){void error;${BOX}const sources:object[]=[{other:1},{other:2}];sources.splice(...([0,1] as const));Object.assign(box,...unread,...sources);return box.inner?.stack;}`,
+    refused: false,
+  },
   // Limits: what a spread of a list the compile cannot read pushes, and what a destructuring
   // assignment writes into an entry, are no write the compile follows.
   {
@@ -149,6 +191,18 @@ const CASES: readonly Case[] = [
   {
     id: 'past-unread-spread-entry-written-by-a-pattern-limit',
     source: `function frames(error:Error,...unread:object[]){${BOX}const sources:object[]=[{other:1},{other:2}];[sources[1]]=[{inner:error}];Object.assign(box,...unread,...sources);${READ}}`,
+    refused: false,
+  },
+  // A limit as well: what replaces the first entry, whose value an assign takes for its target, is
+  // no target the compile records writes to, whether it is assigned or stored.
+  {
+    id: 'exposed-spread-receiver-assigned-limit',
+    source: `function frames(error:Error){${BOX}const sources:object[]=[{other:1},{inner:error}];sources[0]=box;Object.assign(...sources);${READ}}`,
+    refused: false,
+  },
+  {
+    id: 'exposed-spread-receiver-unshifted-limit',
+    source: `function frames(error:Error){${BOX}const sources:object[]=[{other:1},{inner:error}];sources.unshift(box);Object.assign(...sources);${READ}}`,
     refused: false,
   },
 ];
