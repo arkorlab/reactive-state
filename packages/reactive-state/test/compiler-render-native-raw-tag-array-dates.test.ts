@@ -219,6 +219,21 @@ const CASES = [
     owner: false,
     private: false,
   },
+  // A substitution spread the compile cannot resolve may leave a later one consumed.
+  {
+    id: 'raw-call-unresolved-spread-Date',
+    source: `export function Widget(){const render=(head:readonly string[])=>String.raw({raw:['','','']},...head,[new Date(0)]);return <p>{render(['x'])}</p>;}`,
+    input: true,
+    owner: true,
+    private: true,
+  },
+  {
+    id: 'raw-call-unresolved-spread-text-data',
+    source: `export function Widget(){const render=(head:readonly string[])=>String.raw({raw:['','','']},...head,'-');return <p>{render(['x'])}</p>;}`,
+    input: false,
+    owner: false,
+    private: false,
+  },
 ] as const;
 
 describe('native raw tag Date array owner boundaries', () => {

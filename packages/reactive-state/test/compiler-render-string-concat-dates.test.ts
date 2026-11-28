@@ -114,6 +114,20 @@ const CASES = [
     input: false,
     private: false,
   },
+  {
+    id: 'unresolved-spread-Date-argument',
+    source: `export function Widget(){const render=(head:readonly string[])=>''.concat(...head,[new Date(0)] as unknown as string);return <p>{render(['x'])}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unresolved-spread-text-argument-data',
+    source: `export function Widget(){const render=(head:readonly string[])=>''.concat(...head,'-');return <p>{render(['x'])}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('native string concat Date owner boundaries', () => {

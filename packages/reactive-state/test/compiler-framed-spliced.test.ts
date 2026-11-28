@@ -160,7 +160,10 @@ const CASES = [
     invocation: 'frames(new Error("ours"))',
     refused: true,
   },
+  // Re-pinned: an operator is no pure syntax, so no position is exact; the precision cost.
   {
+    // No spread moves a written argument, so the bounds are read where written; natively the
+    // splice removes the Error and the read answers 'fixed'.
     id: 'to-spliced-arithmetic-bound-data-pin',
     source:
       'function frames(error:Error){return[error,{stack:"fixed"}].toSpliced(0+0,2-1)[0]!.stack;}',
@@ -194,6 +197,136 @@ const CASES = [
       'function frames(error:Error){const values:Array<{stack?:string}>=[];let result:unknown;let i=0;do result=values.toSpliced(0,0)[0]?.stack;while((values.push({stack:"later"}),i++<1));return result;}',
     invocation: 'frames(new Error("ours"))',
     refused: false,
+  },
+  {
+    id: 'to-spliced-call-spread',
+    source:
+      "function args(e:Error):[number,number,Error]{return [0,0,e];}function frames(error:Error){return ([{stack:'fixed'}] as {stack?:string}[]).toSpliced(...args(error))[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'to-spliced-call-spread-titled-pin',
+    source:
+      "function args():[number,number,{stack?:string;title:string}]{return [0,0,{stack:'fixed',title:'t'}];}function frames(error:Error){void error;return ([{stack:'fixed',title:'t'}]as{stack?:string;title:string}[]).toSpliced(...args())[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'to-spliced-start-control-pin',
+    source:
+      "function read(items:{stack:string;title:string}[],error:Error){return [{stack:'fixed',title:'t'}].toSpliced(error as never,0,...items)[0]?.stack;}function frames(error:Error){return read([],error);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'to-spliced-count-control-pin',
+    source:
+      "function read(items:{stack:string;title:string}[],error:Error){return [{stack:'fixed',title:'t'}].toSpliced(0,error as never,...items)[0]?.stack;}function frames(error:Error){return read([],error);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'to-spliced-covered-control',
+    source:
+      "function lead():number[]{return [0,0];}function frames(error:Error){return [{stack:'fixed',title:'t'}].toSpliced(...lead(),error as never)[0]?.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'to-spliced-known-spread-count-pin',
+    source:
+      "function read(items:{stack:string;title:string}[],error:Error){return [{stack:'fixed',title:'t'}].toSpliced(...([0] as const),error as never,...items)[0]?.stack;}function frames(error:Error){return read([],error);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'to-spliced-known-spread-inserted',
+    source:
+      "function read(items:{stack:string;title:string}[],error:Error){return [{stack:'fixed',title:'t'}].toSpliced(...([0,0] as const),error as never,...items)[0]?.stack;}function frames(error:Error){return read([],error);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'spliced-effect-before-spread-retains-error',
+    source:
+      "function frames(error:Error){const args:number[]=[];const items:{stack?:string;title:string}[]=[];return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).toSpliced((args.push(0),0),...args,error as never,...items)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  // Re-pinned: a spread of a name supplies a count the compile does not trust; the precision cost.
+  {
+    id: 'spliced-quiet-before-spread-safe-pin',
+    source:
+      "function frames(error:Error){const args:number[]=[];const items:{stack?:string;title:string}[]=[];return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).toSpliced(0,...args,error as never,...items)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'spliced-effect-before-open-spread-retains-error',
+    source:
+      "function read(items:{stack?:string;title:string}[],error:Error){const args:number[]=[];return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).toSpliced((args.push(0),0),...args,error as never,...items)[0]!.stack;}function frames(error:Error){return read([],error);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'spliced-nested-effect-retains',
+    source:
+      "function frames(error:Error,items:{stack:string;title:string}[]){const args:number[]=[];const receiver:{stack:string;title:string}[]=[{stack:'fixed',title:'t'}];return receiver.toSpliced(...[(args.push(0),0),...args],error as never,...items)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"),[])',
+    refused: true,
+  },
+  // Re-pinned: a literal that spreads a name is no pure literal; the precision cost.
+  {
+    id: 'spliced-nested-quiet',
+    source:
+      "function frames(error:Error,items:{stack:string;title:string}[]){const args:number[]=[];const receiver:{stack:string;title:string}[]=[{stack:'fixed',title:'t'}];return receiver.toSpliced(...[0,...args],error as never,...items)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"),[])',
+    refused: true,
+  },
+  {
+    id: 'spliced-apply-tail-retains',
+    source:
+      "function frames(error:Error){const args:unknown[]=[error,0];const receiver=[{stack:'fixed'}];return (Array.prototype.toSpliced.apply(receiver,args as never,(args.unshift(0,0),undefined) as never) as {stack?:string}[])[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'spliced-apply-tail-quiet',
+    source:
+      "function frames(error:Error){const args:unknown[]=[error,0];const receiver=[{stack:'fixed'}];return (Array.prototype.toSpliced.apply(receiver,args as never,undefined as never) as {stack?:string}[])[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  // Positions stand as written only where all the call evaluates first is pure syntax.
+  {
+    id: 'spliced-comma-nested-effect-retains',
+    source:
+      "function frames(error:Error,items:{stack:string;title:string}[]){const args:number[]=[];const receiver:{stack:string;title:string}[]=[{stack:'fixed',title:'t'}];return receiver.toSpliced(...(void 0,[(args.push(0),0),...args]),error as never,...items)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"),[])',
+    refused: true,
+  },
+  {
+    id: 'spliced-apply-receiver-effect-retains',
+    source:
+      "function frames(error:Error){const args:unknown[]=[error];const receiver=[{stack:'fixed'}];return (Array.prototype.toSpliced.apply((args.unshift(0,0),receiver),args as never) as {stack?:string}[])[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  // Thirty nested pure spreads are read once each: the compile stays fast.
+  {
+    id: 'spliced-deep-spread-linear',
+    source: `function frames(error:Error,items:{stack:string;title:string}[]){const receiver:{stack:string;title:string}[]=[{stack:'fixed',title:'t'}];return receiver.toSpliced(${'...['.repeat(30)}0${']'.repeat(30)},error as never,...items)[0]!.stack;}`,
+    invocation: 'frames(new Error("ours"),[])',
+    refused: false,
+  },
+  // An `apply` list the compile cannot read may hand the native any of its elements.
+  {
+    id: 'spliced-apply-unread-list-retains',
+    source:
+      "function read(args:unknown[]){const receiver=[{stack:'fixed'}];return (Array.prototype.toSpliced.apply(receiver,args as never) as {stack?:string}[])[0]!.stack;}function frames(error:Error){return read([0,0,error]);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
   },
 ];
 

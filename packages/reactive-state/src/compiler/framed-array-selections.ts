@@ -281,7 +281,7 @@ function insertedErrors(
   pending: ElementReading[],
 ): boolean {
   if (read === undefined) return false;
-  const { keys, copiedFrom } = reading;
+  const { keys, copied } = reading;
   let written: ReturnType<typeof writtenArrayElements>;
   try {
     written = writtenArrayElements(reading.value, read, reading.index);
@@ -292,11 +292,11 @@ function insertedErrors(
   for (const source of written) {
     const element = source.value;
     if (source.array === true) {
-      pending.push({ value: element, index: undefined, keys, copiedFrom });
+      pending.push({ value: element, index: undefined, keys, copied });
       continue;
     }
     if (source.keys.length === 0 && isSpreadElement(element))
-      pending.push({ value: element.expression, index: undefined, keys, copiedFrom });
+      pending.push({ value: element.expression, index: undefined, keys, copied });
     else if (proof.error(element, [...source.keys, ...(keys ?? [])])) return true;
   }
   return false;
@@ -336,8 +336,8 @@ function literalError(
 }
 
 /**
- * A spread's source keeps every element possible, still followed for the `Array.from` the reading
- * copies; a projection at the position, known or not, adds its values, read on by the keys.
+ * A spread's source keeps every element possible, still followed for what the reading copies
+ * (`copied`); a projection at the position, known or not, adds its values, read on by the keys.
  */
 function spreadReadings(
   spread: SpreadElement,
@@ -345,8 +345,8 @@ function spreadReadings(
   reading: ElementReading,
   proof: ElementProof,
 ): readonly ElementReading[] {
-  const { index, keys, copiedFrom } = reading;
-  const source = { value: spread.expression, index: undefined, keys, copiedFrom };
+  const { index, keys, copied } = reading;
+  const source = { value: spread.expression, index: undefined, keys, copied };
   const readings: ElementReading[] = [source];
   if (index !== undefined && (index < (reading.start ?? 0) || index >= (reading.end ?? Infinity)))
     return readings;
@@ -561,6 +561,7 @@ function arrayReadingError(reading: ElementReading, context: ReadingContext): bo
   const { value } = reading;
   const { proof, pending, read } = context;
   if (reading.typeOnly === true) return typedError(value, reading, proof);
+  if (reading.copied?.follow === false) return framedCopiedUnread(reading);
   if (isArrayLiteralExpression(value)) {
     return literalError(value, reading, proof, pending);
   }

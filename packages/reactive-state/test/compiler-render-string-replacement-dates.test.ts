@@ -134,6 +134,42 @@ const CASES = [
     input: true,
     private: false,
   },
+  // the receiver's and the replacement's Date text stay.
+  {
+    id: 'unread-search-Date-replacement',
+    source: `export function Widget(){const render=(search:string)=>'x'.replace(search,[new Date(0)] as unknown as string);return <p>{render('x')}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unread-search-text-replacement-data',
+    source: `export function Widget(){const render=(search:string)=>'x'.replaceAll(search,'-');return <p>{render('x')}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
+  {
+    id: 'unread-search-Date-receiver',
+    source: `export function Widget(){const render=(search:string)=>String.prototype.replace.call([new Date(0)],search,'-');return <p>{render('y')}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unresolved-spread-Date-replacement',
+    source: `export function Widget(){const render=(head:readonly string[])=>'x'.replace(...(head as [string]),[new Date(0)] as unknown as string);return <p>{render(['x'])}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unresolved-spread-text-replacement-data',
+    source: `export function Widget(){const render=(head:readonly string[])=>'x'.replace(...(head as [string]),'-');return <p>{render(['x'])}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('native string replacement Date owner boundaries', () => {

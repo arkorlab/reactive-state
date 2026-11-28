@@ -20,6 +20,20 @@ const OURS = 'frames(new Error("ours"))';
 
 const CASES: readonly Case[] = [
   {
+    id: 'with-after-native-receiver-data',
+    source:
+      'function frames(error:Error){return ([error] as {stack?:string}[]).slice().with(0,{stack:"fixed"})[0]!.stack;}',
+    invocation: OURS,
+    refused: false,
+  },
+  {
+    id: 'with-after-native-receiver-other-slot-retains',
+    source:
+      'function frames(error:Error){return ([error,{stack:"fixed"}] as {stack?:string}[]).slice().with(1,{stack:"fixed"})[0]!.stack;}',
+    invocation: OURS,
+    refused: true,
+  },
+  {
     id: 'with-spread-review',
     source: `function frames(error:Error){return ${ONE}.with(...([0,error]as const))[0]!.stack;}`,
     invocation: OURS,
@@ -86,6 +100,128 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error,args:[number,{stack:string}]){return[error].with(...args)[0]!.stack;}',
     invocation: 'frames(new Error("ours"),[1,{stack:"other"}])',
+    refused: true,
+  },
+  {
+    id: 'with-call-spread',
+    source:
+      "function args(e:Error):[number,Error]{return [0,e];}function frames(error:Error){return ([{stack:'fixed'}] as {stack?:string}[]).with(...args(error))[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'with-call-spread-titled-pin',
+    source:
+      "function args():[number,{stack?:string;title:string}]{return [0,{stack:'fixed',title:'t'}];}function frames(error:Error){void error;return ([{stack:'fixed',title:'t'}]as{stack?:string;title:string}[]).with(...args())[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'with-written-after-spread',
+    source:
+      "function pre():number[]{return [];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...pre(),0,error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'with-index-control-pin',
+    source:
+      "function vals():{stack?:string;title:string}[]{return [{stack:'fixed',title:'t'}];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(error as never,...vals())[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'with-past-value-after-spread-pin',
+    source:
+      "function pre():number[]{return [];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...pre(),0,{stack:'fixed',title:'t'},error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'with-one-after-spread',
+    source:
+      "function pre():number[]{return [0];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...pre(),error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'with-known-spread-past-value-pin',
+    source:
+      "function pre():number[]{return [];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...([0] as const),...pre(),{stack:'fixed',title:'t'},error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'with-empty-known-spread',
+    source:
+      "function pre():number[]{return [];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...([] as const),...pre(),{stack:'fixed',title:'t'},error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  // Re-pinned: a literal that spreads a call is no pure literal; the precision cost.
+  {
+    id: 'with-partial-spread-past-value-pin',
+    source:
+      "function pre():number[]{return [];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...[0,...pre()],{stack:'fixed',title:'t'},error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'with-empty-partial-spread',
+    source:
+      "function pre():number[]{return [];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...[...pre()],{stack:'fixed',title:'t'},error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  // Re-pinned: a literal that spreads a call is no pure literal; the precision cost.
+  {
+    id: 'with-partial-spread-suffix-safe-pin',
+    source:
+      "function pre():number[]{return [];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...[...pre(),0,{stack:'fixed',title:'t'}],error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'with-partial-spread-short-suffix',
+    source:
+      "function pre():number[]{return [];}function frames(error:Error){return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(...[...pre(),0],error as never)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'with-effect-before-spread-retains-error',
+    source:
+      "function frames(error:Error){const args:Error[]=[];return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with((args.push(error),0),...(args as never[]))[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'with-quiet-before-spread-safe-pin',
+    source:
+      "function frames(error:Error){void error;const args:{stack?:string;title:string}[]=[{stack:'fixed',title:'t'}];return ([{stack:'fixed',title:'t'}] as {stack?:string;title:string}[]).with(0,...args)[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'with-apply-tail-retains',
+    source:
+      "function frames(error:Error){const args:unknown[]=[error,0];const receiver=[{stack:'fixed'}];return (Array.prototype.with.apply(receiver,args as never,(args.unshift(0),undefined) as never) as {stack?:string}[])[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'with-apply-tail-quiet',
+    source:
+      "function frames(error:Error){const args:unknown[]=[error,{stack:'fixed'}];const receiver=[{stack:'fixed'}];return (Array.prototype.with.apply(receiver,args as never,undefined as never) as {stack?:string}[])[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  // An `apply` list the compile cannot read may hand the native any of its elements.
+  {
+    id: 'with-apply-unread-list-retains',
+    source:
+      "function read(args:unknown[]){const receiver=[{stack:'fixed'}];return (Array.prototype.with.apply(receiver,args as never) as {stack?:string}[])[0]!.stack;}function frames(error:Error){return read([0,error]);}",
+    invocation: 'frames(new Error("ours"))',
     refused: true,
   },
 ];

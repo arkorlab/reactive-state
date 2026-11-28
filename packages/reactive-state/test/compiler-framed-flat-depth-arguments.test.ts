@@ -358,6 +358,20 @@ const CASES: readonly Case[] = [
     reader: false,
     refused: false,
   },
+  {
+    id: 'flat-call-depth',
+    source:
+      'function depths():[number]{return [0];}function frames(error:Error){return [[error]].flat(...depths())[0]![0]!.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'flat-call-depth-data-pin',
+    source:
+      "function depths():[number]{return [0];}function frames(error:Error){void error;return [[{stack:'fixed'}]].flat(...depths())[0]![0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('flat depth argument readers', () => {

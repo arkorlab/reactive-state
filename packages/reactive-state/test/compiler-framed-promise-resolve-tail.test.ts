@@ -197,6 +197,55 @@ const CASES = [
     invocation: 'frames(new Error("ours"))',
     refused: true,
   },
+  {
+    id: 'resolve-rest-tail',
+    source:
+      'async function frames(error:Error,...tail:unknown[]){return(await (Promise.resolve as (value:Error,...tail:unknown[])=>Promise<Error>)(error,...tail).then()).stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'resolve-rest-tail-data-pin',
+    source:
+      "async function frames(error:Error,...tail:unknown[]){void error;return(await (Promise.resolve as (value:{stack?:string},...tail:unknown[])=>Promise<{stack?:string}>)({stack:'fixed'},...tail).then()).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'resolve-tail-effect-pin',
+    source:
+      "function tails(e:Error):unknown[]{Object.assign(e,{stack:'fixed'});return [];}async function frames(error:Error){return(await (Promise.resolve as (value:Error,...tail:unknown[])=>Promise<Error>)(error,...tails(error)).then()).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'resolve-rest-iterator-pin',
+    source:
+      "async function frames(error:Error,...tail:unknown[]){tail[Symbol.iterator]=function*(){Object.assign(error,{stack:'fixed'});};return(await (Promise.resolve as (value:Error,...tail:unknown[])=>Promise<Error>)(error,...tail).then()).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'resolve-rest-define-pin',
+    source:
+      "async function frames(error:Error,...tail:unknown[]){Object.defineProperty(tail,Symbol.iterator,{value:function*(){Object.assign(error,{stack:'fixed'});}});return(await (Promise.resolve as (value:Error,...tail:unknown[])=>Promise<Error>)(error,...tail).then()).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'resolve-rest-handoff-pin',
+    source:
+      "function patch(items:unknown[],e:Error){items[Symbol.iterator]=function*(){Object.assign(e,{stack:'fixed'});};}async function frames(error:Error,...tail:unknown[]){patch(tail,error);return(await (Promise.resolve as (value:Error,...tail:unknown[])=>Promise<Error>)(error,...tail).then()).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'resolve-rest-later-write',
+    source:
+      'async function frames(error:Error,...tail:unknown[]){const read=(await (Promise.resolve as (value:Error,...tail:unknown[])=>Promise<Error>)(error,...tail).then()).stack;tail.push(1);return read;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
 ] as const;
 
 describe('native Promise resolve root trailing readers', () => {

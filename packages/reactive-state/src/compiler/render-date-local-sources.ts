@@ -1,4 +1,5 @@
 import {
+  type CallExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -8,16 +9,24 @@ import {
   isIdentifier,
   isParameterDeclaration,
   isPropertyAccessExpression,
+  isSpreadElement,
   isVariableDeclaration,
   isVariableDeclarationList,
+  type NewExpression,
   type Node,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { isImportBinding } from './exported-values.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
-import { framedQuietPrimitive, framedQuietSource } from './framed-native-evaluation.ts';
+import { argumentArrayExposed } from './framed-array-selections.ts';
+import { frameBindingOf, frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
+import { framedArgumentPrefix } from './framed-keys.ts';
+import {
+  framedQuietInputs,
+  framedQuietPrimitive,
+  framedQuietSource,
+} from './framed-native-evaluation.ts';
 import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { bindingIdentifiers, hoistedIn, isBlockScoped } from './scope.ts';
@@ -104,6 +113,81 @@ export function writesWhenEvaluated(value: Expression): boolean {
     });
   }
   return false;
+}
+
+/** Selected mutable array data keeps the same owner and original conversion read point. */
+export function dateSource(value: Expression, consumer: Expression): Expression | undefined {
+  const original = framedQuietSource(value);
+  if (original !== undefined) return original;
+  const aliases = new Set<FrameBinding>();
+  let source = unwrapped(value);
+  let read = consumer;
+  while (isIdentifier(source)) {
+    const selected = frameBindingOf(source);
+    if (selected === undefined || selected.keys.length > 0 || aliases.has(selected.binding))
+      return undefined;
+    const { binding } = selected;
+    const local = conversionLocalSource(source, read);
+    if (local !== undefined) {
+      aliases.add(binding);
+      return argumentArrayExposed(value, aliases) ? undefined : framedQuietSource(local);
+    }
+    if (
+      !isVariableDeclaration(binding) ||
+      !isIdentifier(binding.name) ||
+      !isVariableDeclarationList(binding.parent) ||
+      binding.initializer === undefined ||
+      binding.end >= read.pos ||
+      !framedPrefixSameOwner(binding, read) ||
+      !/^const\b/u.test(binding.parent.getText(binding.getSourceFile()))
+    )
+      return undefined;
+    aliases.add(binding);
+    source = unwrapped(binding.initializer);
+    read = source;
+  }
+  return undefined;
+}
+
+/** Every raw wrapper input is evaluated; only finite array entries gain the local source option. */
+export function dateInputsQuiet(
+  inputs: readonly Expression[],
+  consumer: Expression,
+  natives: ReadonlySet<string>,
+): boolean {
+  const pending = [...inputs];
+  const seen = new Set<Expression>();
+  for (let value = pending.pop(); value !== undefined; value = pending.pop()) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if (framedQuietInputs([value], natives)) continue;
+    const source = dateSource(value, consumer);
+    if (source === undefined) return false;
+    if (isArrayLiteralExpression(source)) pending.push(...source.elements);
+    else if (isSpreadElement(source)) pending.push(source.expression);
+    else return false;
+  }
+  return true;
+}
+
+/** Finite spreads reuse native argument selection; local mutable tuples use original literal entries. */
+export function dateStringArguments(
+  node: CallExpression | NewExpression,
+  given: readonly Expression[],
+): readonly Expression[] | undefined {
+  const values: Expression[] = [];
+  for (const argument of given) {
+    let selected = [argument];
+    if (isSpreadElement(argument)) {
+      const source = conversionLocalSource(argument.expression, node);
+      const array = source === undefined ? undefined : framedQuietSource(source);
+      if (array !== undefined && isArrayLiteralExpression(array)) selected = [...array.elements];
+    }
+    const prefix = framedArgumentPrefix(node, selected, Infinity);
+    if (prefix.unknown || prefix.alternatives !== undefined) return undefined;
+    values.push(...prefix.values);
+  }
+  return values;
 }
 
 /** The original initializer is rechecked by the existing ownership walk, including const aliases. */

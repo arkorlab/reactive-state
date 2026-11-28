@@ -228,6 +228,69 @@ const framedNativeValueCases = [
     invocation: 'frames(new Error())',
     refused: false,
   },
+  {
+    id: 'of-call-spread',
+    source:
+      'function list(e:Error):Error[]{return [e];}function frames(error:Error){return Array.of(...list(error))[0]!.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'of-call-spread-titled-pin',
+    source:
+      "function list():{stack?:string;title:string}[]{return [{stack:'fixed',title:'t'}];}function frames(error:Error){void error;return Array.of<{stack?:string;title:string}>(...list())[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'from-readonly-param-titled-pin',
+    source:
+      "function read(items:ReadonlyArray<{stack:string;title:string}>){return Array.from<{stack:string;title:string}>(items)[0]!.stack;}function frames(error:Error){void error;return read([{stack:'fixed',title:'t'}]);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'from-iterable-param-titled-pin',
+    source:
+      "function read(items:Iterable<{stack?:string}>){return Array.from<{stack:string;title:string}>(items as never)[0]!.stack;}function frames(error:Error){void error;return read([{stack:'fixed',title:'t'}]);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'from-readonly-param-retains',
+    source:
+      'function read(items:ReadonlyArray<{stack?:string}>){return Array.from<{stack?:string}>(items)[0]!.stack;}function frames(error:Error){return read([error]);}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'from-param-at-last-titled-pin',
+    source:
+      "function read(items:{stack:string;title:string}[]){return Array.from<{stack:string;title:string}>(items).at(-1)?.stack;}function frames(error:Error){void error;return read([{stack:'fixed',title:'t'}]);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'from-tuple-at-last-titled-pin',
+    source:
+      "function read(items:[{stack?:string},{stack:string;title:string}]){return Array.from<{stack?:string;title?:string}>(items).at(-1)?.stack;}function frames(error:Error){return read([error,{stack:'fixed',title:'t'}]);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'from-tuple-at-last-retains',
+    source:
+      "function read(items:[{stack:string;title:string},{stack?:string}]){return Array.from<{stack?:string}>(items).at(-1)?.stack;}function frames(error:Error){return read([{stack:'fixed',title:'t'},error]);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'from-open-tuple-at-last-retains',
+    source:
+      "function read(items:[{stack:string;title:string},...{stack?:string}[]]){return Array.from<{stack?:string}>(items).at(-1)?.stack;}function frames(error:Error){return read([{stack:'fixed',title:'t'},error]);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
 ] as const;
 
 describe('native value origins', () => {

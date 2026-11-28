@@ -271,6 +271,29 @@ const CASES = [
     native: null,
     owner: null,
   },
+  // A left side the compile cannot read may be any value; the array it is given becomes text.
+  {
+    id: 'unread-left-array',
+    source:
+      "export function Widget(){const render=(text:string)=>{text += [new Date(0)];return text;};return <p>{render('x')}</p>;}",
+    input: true,
+    private: true,
+    runtime:
+      "export function probe():string{const render=(text:string)=>{text += [new Date(0)];return text;};return render('x');}",
+    native: 'zone',
+    owner: true,
+  },
+  {
+    id: 'unread-left-text-array-data',
+    source:
+      "export function Widget(){const render=(text:string)=>{text += ['-'];return text;};return <p>{render('x')}</p>;}",
+    input: false,
+    private: false,
+    runtime:
+      "export function probe():string{const render=(text:string)=>{text += ['-'];return text;};return render('x');}",
+    native: 'same',
+    owner: false,
+  },
 ] as const;
 
 describe('array Date addition assignment owner boundaries', () => {

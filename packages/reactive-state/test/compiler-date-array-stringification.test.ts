@@ -215,6 +215,20 @@ const CASES = [
     input: false,
     private: false,
   },
+  {
+    id: 'borrowed-String-unread-tail',
+    source:
+      'export function Widget(){const render=(extra:readonly never[])=>String.call(null,[new Date(0)],...extra);return <p>{render([])}</p>;}',
+    input: true,
+    private: true,
+  },
+  {
+    id: 'borrowed-String-unread-tail-data',
+    source:
+      "export function Widget(){const render=(extra:readonly never[])=>String.call(null,['x'],...extra);return <p>{render([])}</p>;}",
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('date array stringification readers', () => {

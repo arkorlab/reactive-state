@@ -64,6 +64,24 @@ const CASES: readonly Case[] = [
       'function frames(error:Error){return([{message:"fixed"}]as{message?:string}[]).concat(...[[new Error("fixed")]])[1]!.message;}',
     refused: false,
   },
+  {
+    id: 'concat-call-spread',
+    source:
+      'function pack(e:Error):Error[][]{return [[e]];}function frames(error:Error){return ([{stack:"fixed"}]as{stack?:string}[]).concat(...pack(error))[1]!.stack;}',
+    refused: true,
+  },
+  {
+    id: 'concat-param-spread',
+    source:
+      'function frames(error:Error,args:Error[][]=[[error]]){return ([{stack:"fixed"}]as{stack?:string}[]).concat(...args)[1]!.stack;}',
+    refused: true,
+  },
+  {
+    id: 'concat-call-spread-titled-pin',
+    source:
+      "function pack():{stack?:string;title:string}[][]{return [[{stack:'fixed',title:'t'}]];}function frames(error:Error){void error;return ([{stack:'fixed',title:'t'}]as{stack?:string;title:string}[]).concat(...pack())[1]!.stack;}",
+    refused: false,
+  },
 ];
 
 describe('concat spread argument readers', () => {

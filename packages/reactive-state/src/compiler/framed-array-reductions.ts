@@ -19,6 +19,8 @@ import { selectedError } from './framed-array-selections.ts';
 import { arrayMethodMayBeOverridden } from './framed-arrays.ts';
 import { framedAtMethod } from './framed-at-methods.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
+import { framedDeclaredResult } from './framed-copied-inputs.ts';
+import { framedMemberAdmitted } from './framed-error-admission.ts';
 import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
 import { quietMapperFunction } from './framed-mapper-quiet.ts';
 import { mapperReplacementViews } from './framed-mapper-replacements.ts';
@@ -35,6 +37,8 @@ interface Reduction {
   readonly given: readonly Expression[];
   readonly borrowed: boolean;
   readonly expanded: boolean;
+  /** An unresolved spread supplies the reducer or the initial value: neither can be read. */
+  readonly unknown: boolean;
 }
 
 type ElementProof = Parameters<typeof selectedError>[2];
@@ -46,7 +50,8 @@ export function framedArrayReduction(
 ): boolean | undefined {
   const selected = reduction(call);
   if (selected === undefined) return undefined;
-  if (!selected.borrowed && arrayMethodMayBeOverridden(call, selected.method)) return true;
+  const settled = settledReduction(selected, call);
+  if (settled !== undefined) return settled.answer;
   const carried = reductionProof(selected, call, proof);
   if (carried === undefined) return undefined;
   const initial = selected.given[1];
@@ -112,6 +117,23 @@ export function framedArrayReduction(
       error: carried.error,
     });
   });
+}
+
+/**
+ * What a reduction answers before the native's own reading: anything where the file may give the
+ * array a method of that name of its own (`arrayMethodMayBeOverridden`), as it is then no native
+ * reduction; or, where an unresolved spread supplies the reducer or the initial value, an Error the
+ * declared result type (`framedDeclaredResult`) admits. None where the native reads on.
+ */
+function settledReduction(
+  selected: Reduction,
+  call: CallExpression,
+): { readonly answer: boolean | undefined } | undefined {
+  if (!selected.borrowed && arrayMethodMayBeOverridden(call, selected.method))
+    return { answer: true };
+  if (!selected.unknown) return undefined;
+  const declared = framedDeclaredResult(call, selected.borrowed);
+  return { answer: framedMemberAdmitted(declared, []) ? true : undefined };
 }
 
 /** TypeScript's leading this declaration consumes no runtime accumulator or current-value slot. */
@@ -245,28 +267,28 @@ function reduction(call: CallExpression): Reduction | undefined {
         : framedAppliedArguments(call, borrowed.applied);
     if (given === undefined) return undefined;
     const expanded = framedArgumentPrefix(call, given);
-    return expanded.unknown
-      ? undefined
-      : {
-          receiver: borrowed.receiver,
-          method,
-          given: expanded.values,
-          borrowed: true,
-          expanded: given.slice(0, 2).some((each) => isSpreadElement(each)),
-        };
+    if (expanded.alternatives !== undefined) return undefined;
+    return {
+      receiver: borrowed.receiver,
+      method,
+      given: expanded.values,
+      borrowed: true,
+      expanded: given.slice(0, 2).some((each) => isSpreadElement(each)),
+      unknown: expanded.unknown,
+    };
   }
   const member = unwrapped(call.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return undefined;
   const method = frameMemberName(member);
   if (method !== 'reduce' && method !== 'reduceRight') return undefined;
   const expanded = framedArgumentPrefix(call, call.arguments, 2, false);
-  return expanded.unknown
-    ? undefined
-    : {
-        receiver: member.expression,
-        method,
-        given: expanded.values,
-        borrowed: false,
-        expanded: call.arguments.slice(0, 2).some((each) => isSpreadElement(each)),
-      };
+  if (expanded.alternatives !== undefined) return undefined;
+  return {
+    receiver: member.expression,
+    method,
+    given: expanded.values,
+    borrowed: false,
+    expanded: call.arguments.slice(0, 2).some((each) => isSpreadElement(each)),
+    unknown: expanded.unknown,
+  };
 }

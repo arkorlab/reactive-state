@@ -1,5 +1,4 @@
 import {
-  type CallExpression,
   type Expression,
   isArrayBindingPattern,
   isBindingElement,
@@ -7,6 +6,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
+  type TypeNode,
 } from 'typescript/ast';
 
 import { frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
@@ -34,20 +34,28 @@ export interface ArrayElementView {
    */
   readonly unread?: boolean;
   /**
-   * The native `Array.from` whose source the reading follows: one no array reader reads may hold
-   * an Error where the declared element type admits one (`framedCopiedUnread`).
+   * What a native copies its elements from, an input the compile may not read, and the elements'
+   * declared type (`framedCopiedUnread`).
    */
-  readonly copiedFrom?: CopiedFrom | undefined;
+  readonly copied?: CopiedElements | undefined;
 }
 
 /**
- * The native `Array.from` a reading copies for, and how many of the reading's leading keys select
- * the copied element out of arrays it is read from: `groups` of `Array.from(groups[0])` is read on
- * by the element's index first.
+ * The elements a native copies from an input — `Array.from`'s source, an unresolved spread of
+ * `Array.of`, `concat`, `with` or `toSpliced` — under their declared type, `undefined` where none
+ * is written. Where `follow`, the reading follows the input to what no array reader reads;
+ * otherwise, for a result of a callback the compile cannot read, the input is read as such. The
+ * first `depth` keys of a reading select the copied element out of arrays it is read from:
+ * `groups` of `Array.from(groups[0])` is read on by the element's index first.
  */
-interface CopiedFrom {
-  readonly call: CallExpression;
+interface CopiedElements {
+  readonly declared: TypeNode | undefined;
+  readonly follow: boolean;
   readonly depth: number;
+  /** Whether the input's elements are the copied ones, as `concat`'s array arguments are not. */
+  readonly own: boolean;
+  /** Whether `declared` is the type of the array the elements are copied into, not of one of them. */
+  readonly array?: boolean;
 }
 
 /**
