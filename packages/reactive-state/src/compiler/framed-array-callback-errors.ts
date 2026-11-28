@@ -20,10 +20,11 @@ import { globalPathOf, useOf } from './code-globals.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
 import { selectedError } from './framed-array-selections.ts';
 import { arrayMethodMayBeOverridden, framedArrayWrittenWords } from './framed-arrays.ts';
-import { frameBindingOf, frameMemberName, frameTypeOf } from './framed-bindings.ts';
+import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { quietNativeCallbackRest } from './framed-callback-rest-patterns.ts';
 import { framedCallbackSpreadInput } from './framed-callback-spreads.ts';
 import { framedCollectionCallbackError } from './framed-collection-callbacks.ts';
+import { namesTypedElements } from './framed-iterated-types.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedLiteralObject } from './framed-literal-data.ts';
 import { framedMapKey } from './framed-map-keys.ts';
@@ -31,7 +32,6 @@ import { framedNativeArguments } from './framed-native-arguments.ts';
 import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedNativeErrorCreation } from './framed-receivers.ts';
 import { framedAssignedValues } from './framed-writes.ts';
-import { namesLocalMemberArrayType } from './local-type-reading.ts';
 
 /** Synchronous native callbacks retain their written array and collection parameter origins. */
 
@@ -251,8 +251,5 @@ function callbackArrayType(
     })
   )
     return false;
-  const type = frameTypeOf(value);
-  return (
-    type !== undefined && namesLocalMemberArrayType(type.type, type.keys, context.names, { index })
-  );
+  return namesTypedElements(value, index, context.names);
 }

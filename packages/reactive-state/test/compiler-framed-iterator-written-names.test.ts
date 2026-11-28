@@ -248,7 +248,10 @@ function boundaryQuiet(program: string, followed: boolean): boolean {
   });
 }
 
-/** Whether the reader answers that the receiver of the `.stack` it finds is the function's `error`. */
+/**
+ * Whether the reader answers that the receiver of the `.stack` it finds is the function's `error`: by
+ * what the code writes, with no type names to read a collection's declared elements by.
+ */
 function firstValueRead(program: string): boolean {
   using api = openTypeScript();
   using parsed = parseModule(api, 'iterator-written-names.ts', program);
@@ -262,6 +265,7 @@ function firstValueRead(program: string): boolean {
       read.expression,
       { made: false, keys: [] },
       (each) => isIdentifier(each) && each.text === 'error',
+      new Set<string>(),
     ) === true
   );
 }

@@ -19,6 +19,7 @@ import {
 import { type Answering, isAnswering } from './answers.ts';
 import { framedArrayCallbackError } from './framed-array-callback-errors.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { framedLoopSources, framedLoopYields } from './framed-loop-variables.ts';
 import { framedPatternDefaults } from './framed-pattern-defaults.ts';
 import { framedAssignedSources } from './framed-writes.ts';
 import {
@@ -108,6 +109,8 @@ export function framedNamedError(
     framedArrayCallbackError(value, made, errors, check.branch) ||
     namesLocalMemberType(declared.type, keys, errors) ||
     framedAssignedSources(value).some((each) => check.branch(each.value, made, each.keys)) ||
+    framedLoopYields(declared, keys, errors) ||
+    framedLoopSources(declared, keys).some((each) => check.branch(each.value, made, each.keys)) ||
     defaults?.some((each) => check.branch(each, made)) === true ||
     (declared.initializer !== undefined && check.chain(declared.initializer, made, keys))
   );

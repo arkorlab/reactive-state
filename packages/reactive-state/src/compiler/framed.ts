@@ -42,7 +42,12 @@ import {
   framedArrayText,
   framedArrayWrittenWords,
 } from './framed-arrays.ts';
-import { frameDeclarationOf, framedInputName, frameTypeOf } from './framed-bindings.ts';
+import {
+  frameDeclarationOf,
+  framedInputName,
+  type FrameTypeSelection,
+  frameTypeOf,
+} from './framed-bindings.ts';
 import { observedErrorAt, type ErrorObservation } from './framed-callback-observations.ts';
 import { framedClonedObjectData } from './framed-cloned-object-data.ts';
 import { framedIteratorResult } from './framed-collection-iterators.ts';
@@ -62,6 +67,7 @@ import { framedErrorMessage } from './framed-error-messages.ts';
 import { framedErrorShape } from './framed-error-shape.ts';
 import { framedFactoryMemberResult } from './framed-factory-members.ts';
 import { framedFinallyResult } from './framed-finally-results.ts';
+import { namesIteratedType } from './framed-iterated-types.ts';
 import { framedJsonMembers } from './framed-json-members.ts';
 import { computedBindingContainer } from './framed-keys.ts';
 import { framedLiteralObject } from './framed-literal-data.ts';
@@ -333,12 +339,7 @@ function typedOrNamedError(
     return false;
   if (assertions.some((each) => namesLocalMemberType(each.type, [...each.keys, ...keys], ERRORS)))
     return true;
-  const selected = frameTypeOf(value) ?? framedThisType(value);
-  if (
-    selected !== undefined &&
-    namesLocalMemberType(selected.type, [...selected.keys, ...keys], ERRORS)
-  )
-    return true;
+  if (typedError(frameTypeOf(value) ?? framedThisType(value), keys)) return true;
   return (
     keys.length === 0 &&
     isIdentifier(value) &&
@@ -350,6 +351,15 @@ function typedOrNamedError(
         chain: (each, local, path) => isError(each, local, seen, { keys: path, point }),
       },
     )
+  );
+}
+
+/** Whether a written type, read at the keys, names an error, or yields one where it is iterated. */
+function typedError(selected: FrameTypeSelection | undefined, keys: readonly string[]): boolean {
+  return (
+    selected !== undefined &&
+    (namesLocalMemberType(selected.type, [...selected.keys, ...keys], ERRORS) ||
+      namesIteratedType(selected, keys, ERRORS))
   );
 }
 
@@ -391,8 +401,11 @@ function sourceError(
     isError(each, local, new Set(seen), { keys: path, point }),
   );
   if (native !== undefined) return native;
-  const iterated = framedIteratorResult(value, { made, keys }, (each, local, path) =>
-    isError(each, local, new Set(seen), { keys: path, point }),
+  const iterated = framedIteratorResult(
+    value,
+    { made, keys },
+    (each, local, path) => isError(each, local, new Set(seen), { keys: path, point }),
+    ERRORS,
   );
   if (iterated !== undefined) return iterated;
   const returned = framedFactoryMemberResult(value, { made, keys }, (each, local) =>

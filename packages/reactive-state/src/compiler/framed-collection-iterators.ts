@@ -33,6 +33,7 @@ import {
   framedDeclaredAdmitted,
 } from './framed-declared-collections.ts';
 import { finiteSetSelection } from './framed-finite-set-results.ts';
+import { namesAcquiredType } from './framed-iterated-types.ts';
 import { iteratorCarriedUnexposed } from './framed-iterator-carried.ts';
 import { framedIteratorFromResult } from './framed-iterator-from.ts';
 import {
@@ -81,6 +82,7 @@ export function framedIteratorResult(
   node: Expression,
   read: IteratorRead,
   error: ErrorValue,
+  names: ReadonlySet<string>,
 ): boolean | undefined {
   const path = [...read.keys];
   let value = unwrapped(node);
@@ -104,10 +106,48 @@ export function framedIteratorResult(
       !framedIteratorRestored(iterator.value, iterator.bindings, value))
   )
     return undefined;
-  return iteratorValue(
-    iterator.value,
-    { made: read.made, keys: path, capture: value, consumer: node },
-    error,
+  return (
+    iteratorValue(
+      iterator.value,
+      { made: read.made, keys: path, capture: value, consumer: node },
+      error,
+    ) ?? typedIteratorValue(iterator.value, path, names)
+  );
+}
+
+/**
+ * What a native iterator of a collection no reader follows yields where the collection's written type
+ * declares it (`namesAcquiredType`): a parameter holds what its caller gives, as the element of the
+ * same list read by an index is. A collection written out is not asked (`writtenCollection`).
+ */
+function typedIteratorValue(
+  iterator: Expression,
+  path: readonly string[],
+  names: ReadonlySet<string>,
+): true | undefined {
+  return namesAcquiredType(iterator, path, names, writtenCollection) ? true : undefined;
+}
+
+/**
+ * Whether the collection an iterator is acquired of is written out where the compile reads it: a
+ * finite list, in place or through a whole constant alias, that no code takes to change, or a Set or
+ * a Map built from an argument, whose declared type `collectionValue` has already asked. What such a
+ * collection holds is what its source says, whatever type a name it is held in is written with.
+ */
+function writtenCollection(receiver: Expression): boolean {
+  const source = constantSource(receiver);
+  if (source === undefined) return false;
+  const { value } = source;
+  if (isArrayLiteralExpression(value))
+    return (
+      !value.elements.some((each) => isSpreadElement(each)) &&
+      !argumentArrayExposed(receiver, source.bindings, undefined, false)
+    );
+  return (
+    isNewExpression(value) &&
+    (value.arguments?.length ?? 0) > 0 &&
+    (framedNativeConstructor(value.expression, SETS) ||
+      framedNativeConstructor(value.expression, MAPS))
   );
 }
 

@@ -28,6 +28,7 @@ import { destructuredFirst } from './destructuring-order.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
+import { framedLoopSources } from './framed-loop-variables.ts';
 import { framedAccessorTakes, framedLiteralAccessor } from './framed-member-accessors.ts';
 import {
   framedHeldVariable,
@@ -151,11 +152,13 @@ export function framedHeldValues(
     };
   });
   const { initializer } = selected.binding;
+  // What a `for … of` header's declaration takes is held on the path as the loop iterates it.
+  const looped = framedLoopSources(selected.binding, [...selected.keys, ...path]);
   if (selected.keys.length > 0) {
     const keys = [...selected.keys, ...path];
     return {
       initial: initializer === undefined ? undefined : { value: initializer, keys },
-      held: assigned.map((each) => each.held),
+      held: [...assigned.map((each) => each.held), ...looped],
     };
   }
   const holder = framedHeldVariable(selected.binding);
@@ -176,10 +179,12 @@ export function framedHeldValues(
   if (cut === undefined) {
     const initial =
       holder.initializer === undefined ? undefined : { value: holder.initializer, keys: path };
-    return { initial, held: changes.map((each) => each.held) };
+    return { initial, held: [...changes.map((each) => each.held), ...looped] };
   }
   const later = changes.filter((each) => !replacedBy(each, cut, point));
-  return { initial: undefined, held: [cut.held, ...later.map((each) => each.held)] };
+  // The plain assignment of the loop's own variable replaces what the header gave it.
+  const headed = direct ? [] : looped;
+  return { initial: undefined, held: [cut.held, ...later.map((each) => each.held), ...headed] };
 }
 
 /**
