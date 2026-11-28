@@ -455,7 +455,7 @@ export function reachedLoopRead(reached: boolean | 'loops'): typeof repeatedFram
 }
 
 /** The written body of the language's loop forms, one of the parts each later pass repeats. */
-function loopBody(node: Node): Node | undefined {
+export function loopBody(node: Node): Node | undefined {
   return isForStatement(node) ||
     isForOfStatement(node) ||
     isForInStatement(node) ||

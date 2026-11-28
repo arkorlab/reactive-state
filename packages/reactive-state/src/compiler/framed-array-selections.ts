@@ -14,21 +14,19 @@ import {
   isPropertyAccessExpression,
   isSpreadElement,
   type SpreadElement,
-  isVariableDeclaration,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { answersLater } from './answers.ts';
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, useOf } from './code-globals.ts';
-import { destructuredFirst } from './destructuring-order.ts';
+import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { arrayCopyMayBeOverridden, arrayCopyViews } from './framed-array-copies.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
 import { entryArrayViews } from './framed-array-enumerations.ts';
+import { argumentArrayExposed, argumentArrayReached } from './framed-array-exposure.ts';
 import { arrayFactoryViews } from './framed-array-factories.ts';
-import { executionOwner } from './framed-array-mutations.ts';
 import { arrayProjectedViews, arrayProjectionMayBeOverridden } from './framed-array-projections.ts';
 import { arrayRestView, type ArrayElementView } from './framed-array-rest.ts';
 import { arrayMethodMayBeOverridden } from './framed-arrays.ts';
@@ -36,10 +34,8 @@ import { asyncArrayFactoryViews } from './framed-async-array-factories.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedCopiedUnread } from './framed-copied-inputs.ts';
 import { asyncFoundElements } from './framed-find-results.ts';
-import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
-import { bindingUses } from './framed-local-uses.ts';
 import { mapperRestReadingViews } from './framed-mapper-rest.ts';
 import {
   indexedReading,
@@ -48,11 +44,12 @@ import {
 } from './framed-nested-selections.ts';
 import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { framedCondition } from './framed-sources.ts';
-import { framedAssignedSources, framedPossibleBranch, reachedLoopRead } from './framed-writes.ts';
+import { framedAssignedSources } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
 
 /** Native array element selections retain the error identity of their possible results. */
+
+export { argumentArrayExposed, argumentArrayReached } from './framed-array-exposure.ts';
 
 type ElementReading = ArrayElementView;
 
@@ -140,75 +137,6 @@ function appliedArgument(expression: Expression): Pick<AtSelection, 'argument' |
   if (argument === undefined || isOmittedExpression(argument))
     return { argument: undefined, unknown: false };
   return { argument, unknown: isSpreadElement(argument) };
-}
-
-/**
- * Only a whole constant alias chain retains an apply array before its entries can be exposed. A use
- * counts where it runs before the read: written before it, but for one in a destructuring pattern
- * whose source holds the read, or in a loop's condition, update or body on the next pass. Where
- * `reached`, one in what a pattern around the read destructures counts too; where false, for a
- * reader whose proof an exposure drops, only a loop body's uses repeat.
- */
-export function argumentArrayExposed(
-  expression: Expression,
-  aliases: ReadonlySet<FrameBinding>,
-  unchanged?: (name: Identifier) => boolean,
-  reached: boolean | 'loops' = 'loops',
-): boolean {
-  if (aliases.size === 0) return false;
-  const root = expression.getSourceFile();
-  for (const alias of aliases) {
-    for (const node of bindingUses(root, alias)) {
-      if (argumentUseExposed(node, expression, aliases, reached) && unchanged?.(node) !== true)
-        return true;
-    }
-  }
-  return false;
-}
-
-/**
- * An exposure by any use that may run before the read: one written before it, one in what a
- * destructuring pattern around the read destructures, which runs first though written after, and
- * one in a loop's condition or update on the next pass — for a reader that keeps every candidate of
- * an exposed array, so that an exposure widens what it keeps and never drops a proof.
- */
-export function argumentArrayReached(
-  expression: Expression,
-  aliases: ReadonlySet<FrameBinding>,
-): boolean {
-  return argumentArrayExposed(expression, aliases, undefined, true);
-}
-
-/** Earlier uses or possible closure uses lose the exact index, retaining lexical identity. */
-function argumentUseExposed(
-  name: Identifier,
-  expression: Expression,
-  aliases: ReadonlySet<FrameBinding>,
-  reached: boolean | 'loops',
-): boolean {
-  if (!readsBinding(name)) return false;
-  const selected = frameBindingOf(name);
-  if (selected === undefined || name === selected.binding.name || !aliases.has(selected.binding))
-    return false;
-  if (name === unwrapped(expression)) return false;
-  const reader = executionOwner(expression);
-  const owner = executionOwner(name);
-  if (owner === reader) {
-    if (
-      (name.pos >= expression.pos || destructuredFirst(expression, name)) &&
-      !(reached === true && destructuredFirst(name, expression)) &&
-      !reachedLoopRead(reached)(name, expression, selected.binding, reader)
-    )
-      return false;
-  } else if (unreferencedLocalFunction(owner, reader)) return false;
-  if (!framedPossibleBranch(name)) return false;
-  const { parent } = useOf(name);
-  return (
-    !isVariableDeclaration(parent) ||
-    parent.initializer === undefined ||
-    unwrapped(parent.initializer) !== name ||
-    !aliases.has(parent)
-  );
 }
 
 /** Native at converts an omitted argument or primitive constant to its truncated numeric index. */

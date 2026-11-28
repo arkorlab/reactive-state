@@ -26,6 +26,18 @@ export function destructuredFirst(node: Node, read: Node): boolean {
   return false;
 }
 
+/**
+ * Whether `read` lies in a destructuring pattern, or in a loop's binding: where it does, a node
+ * written after it may be what its pattern destructures (`destructuredFirst`), and where it does
+ * not, none is.
+ */
+export function inDestructuring(read: Node): boolean {
+  for (let within = read; !isSourceFile(within); within = within.parent) {
+    if (destructured(within.parent, within) !== undefined) return true;
+  }
+  return false;
+}
+
 /** Whether `node` is a destructuring pattern, or a loop's binding, whose source holds `consumer`. */
 export function patternAfter(node: Node, consumer: Node): boolean {
   const source = isSourceFile(node) ? undefined : destructured(node.parent, node);
