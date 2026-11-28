@@ -95,6 +95,47 @@ export function leavesSession(sql: string, conforming: boolean): boolean {
   });
 }
 
+/** The words a statement that ends the transaction under way begins with. */
+const TRANSACTION_ENDS = new Set(['abort', 'commit', 'end', 'rollback']);
+
+/**
+ * Whether the statement whose first word is at `at` of `tokens` ends the transaction under way: a
+ * `COMMIT`, `END`, `ABORT` or `ROLLBACK`, with its options (`AND CHAIN`, `WORK`) — not a rollback to
+ * a savepoint, which leaves the settings made before it, nor of a prepared transaction, another's.
+ */
+function endsTransactionAt(tokens: readonly string[], at: number): boolean {
+  if (!TRANSACTION_ENDS.has(tokens[at] ?? '')) return false;
+  const next = tokens[at + 1];
+  const after = next === 'work' || next === 'transaction' ? tokens[at + 2] : next;
+  return after !== 'prepared' && (after !== 'to' || tokens[at] !== 'rollback');
+}
+
+/**
+ * Whether the settings a transaction holds for itself (`SET LOCAL`, `set_config(…, true)`) are held
+ * after `sql`, a text of a connection's, where they `before` it were: set by a statement of it, let
+ * go of where a statement of it ends the transaction, whichever way it is written (`COMMIT;`,
+ * `END`, `COMMIT AND CHAIN`), in the order the text has them. A text the lexer cannot read changes
+ * nothing it says.
+ */
+export function scopedAfter(sql: string, conforming: boolean, before: boolean): boolean {
+  const tokens = sqlTokens(sql, conforming);
+  if (tokens === undefined) return before;
+  let held = before;
+  for (const [at, token] of tokens.entries()) {
+    const opens = at === 0 || tokens[at - 1] === ';';
+    if (opens && endsTransactionAt(tokens, at)) held = false;
+    else if (
+      (opens && token === 'set' && tokens[at + 1] === 'local') ||
+      (identifierOf(token) === 'set_config' &&
+        tokens[at + 1] === '(' &&
+        setsForTransaction(tokens, at + 1))
+    ) {
+      held = true;
+    }
+  }
+  return held;
+}
+
 /** A temporary table's row type, which ordinary staging-table DDL intentionally does not follow. */
 export interface TemporaryRowType {
   readonly name: string;
