@@ -123,6 +123,21 @@ describe.skipIf(SERVER_URL === undefined)(
     );
 
     it(
+      'renders through the next transaction, which set nothing, as the one before it ended',
+      async () => {
+        const setup = await pooled();
+        const connection = await held(setup);
+        const ofHeld = await rendering(setup, connection);
+        await localize(connection);
+        await connection.query('COMMIT');
+        await connection.query('BEGIN');
+
+        await expect(ofHeld.render()).resolves.toContain('a,b');
+      },
+      SERVER_TIMEOUT_MS,
+    );
+
+    it(
       'renders through it once the transaction ended, as the setting ended with it',
       async () => {
         const setup = await pooled();
