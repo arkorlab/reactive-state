@@ -14,6 +14,8 @@ export interface MapWrite {
   readonly open: boolean;
   /** The call may run an own method in place of the native one. */
   readonly custom: boolean;
+  /** The value it stores is one the compile cannot read: of an argument list it cannot resolve. */
+  readonly unread: boolean;
 }
 
 /** The possible stored values, whether they are all of them, and whether the receiver stays. */
@@ -21,11 +23,14 @@ export interface MapValues {
   readonly values: readonly Expression[];
   readonly complete: boolean;
   readonly sameReceiver: boolean;
+  /** Whether a possible write stores a value the compile cannot read, which `values` lacks. */
+  readonly unread: boolean;
 }
 
 /**
  * The last definite native write replaces earlier entries, including a known undefined value. An
- * open write keeps every argument of its call and leaves the entries unknown.
+ * open write keeps every argument of its call and leaves the entries unknown, as an unread one
+ * does.
  */
 export function framedStoredValues(
   read: CallExpression,
@@ -48,10 +53,15 @@ export function framedStoredValues(
     );
   });
   for (const write of kept) values.push(...writtenValues(write));
+  const unread = latest?.unread === true || kept.some((write) => write.unread);
   return {
     values,
-    complete: kept.every((write) => !write.open) && (latest !== undefined || initial !== undefined),
+    complete:
+      !unread &&
+      kept.every((write) => !write.open) &&
+      (latest !== undefined || initial !== undefined),
     sameReceiver,
+    unread,
   };
 }
 
@@ -68,6 +78,7 @@ export function framedUnprovenValues(
     values: [...(initial ?? []), ...writes.flatMap((write) => writtenValues(write))],
     complete: writes.length === 0,
     sameReceiver,
+    unread: writes.some((write) => write.unread),
   };
 }
 

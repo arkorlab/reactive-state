@@ -204,6 +204,21 @@ const CASES = [
     owner: true,
     private: true,
   },
+  // A substitution the compile cannot read may be any value; the later ones still become text.
+  {
+    id: 'unread-earlier-substitution',
+    source: `export function Widget(){const render=(label:string)=>String.raw\`\${label}\${[new Date(0)]}\`;return <p>{render('x')}</p>;}`,
+    input: true,
+    owner: true,
+    private: true,
+  },
+  {
+    id: 'unread-earlier-substitution-data',
+    source: `export function Widget(){const render=(label:string)=>String.raw\`\${label}\${['x']}\`;return <p>{render('x')}</p>;}`,
+    input: false,
+    owner: false,
+    private: false,
+  },
 ] as const;
 
 describe('native raw tag Date array owner boundaries', () => {

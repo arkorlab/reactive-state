@@ -1,5 +1,6 @@
 import {
   type Expression,
+  type ExpressionWithTypeArguments,
   type Identifier,
   type ObjectLiteralExpression,
   isArrowFunction,
@@ -7,15 +8,22 @@ import {
   isBlock,
   isClassDeclaration,
   isClassExpression,
+  isClassStaticBlockDeclaration,
+  isComputedPropertyName,
   isConditionalExpression,
+  isConstructorDeclaration,
+  isDecorator,
   isElementAccessExpression,
   isExpressionStatement,
+  isExpressionWithTypeArguments,
   isHeritageClause,
   isIdentifier,
+  isInterfaceDeclaration,
   isMethodDeclaration,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isPropertyDeclaration,
   isReturnStatement,
   isSetAccessorDeclaration,
   isSpreadAssignment,
@@ -50,6 +58,8 @@ interface ReceiverReading {
   readonly node: Node;
   readonly nested: boolean;
   readonly own: boolean;
+  /** Whether `this` is the receiver around the nearest class, where its decorators run. */
+  readonly around: boolean;
 }
 
 /** Whether a method value names only source-written callables rather than a native implementation. */
@@ -70,33 +80,89 @@ export function framedReceiverDispatch(
 }
 
 /**
- * An arrow has no `this` of its own; a nested function, accessor or class binds a new one, but not
- * for the expression a class extends.
+ * An arrow has no `this` of its own; a nested function, accessor, constructor, class field or
+ * static block binds a new one (`bindsThis`), but for its computed name, which runs outside it. A
+ * class binds none: its heritage and its members' names read the enclosing `this`, and only its
+ * members' bodies have their own. Every decorator in a class — of the class, a member or a
+ * parameter, as TypeScript's legacy ones are — runs as the class is defined, around it.
  */
 function receiverUsed(fn: Answering, receiver: (node: Identifier) => boolean): boolean {
-  const pending: ReceiverReading[] = [{ node: fn, nested: false, own: !isArrowFunction(fn) }];
+  const self = !isArrowFunction(fn);
+  const pending: ReceiverReading[] = [{ node: fn, nested: false, own: self, around: self }];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const { node, nested, own } = at;
     if (isTypeOnly(node)) continue;
     const used =
       (own && node.kind === SyntaxKind.ThisKeyword) || (isIdentifier(node) && receiver(node));
     if (used && (nested || !returnedBy(node, fn))) return true;
-    const inner =
-      node !== fn &&
-      (isAnswering(node) ||
-        isSetAccessorDeclaration(node) ||
-        isClassDeclaration(node) ||
-        isClassExpression(node));
-    const binds = inner && !isArrowFunction(node);
-    node.forEachChild((child) => {
-      pending.push({
-        node: child,
-        nested: nested || inner,
-        own: own && (!binds || isHeritageClause(child)),
-      });
-    });
+    pending.push(...childReadings(at, fn));
   }
   return false;
+}
+
+/**
+ * How a node's children read `this`: inside a nested function or class, where a use always counts;
+ * as their own where the node binds one, but for its computed name; and a decorator as the scope
+ * around its class does.
+ */
+function childReadings(at: ReceiverReading, fn: Answering): readonly ReceiverReading[] {
+  const { node, nested, own } = at;
+  const inner =
+    node !== fn &&
+    (isAnswering(node) ||
+      isSetAccessorDeclaration(node) ||
+      isClassDeclaration(node) ||
+      isClassExpression(node));
+  const binds = node !== fn && bindsThis(node);
+  const around = isClassDeclaration(node) || isClassExpression(node) ? own : at.around;
+  return evaluatedChildren(node).map((child) => {
+    const scoped = own && (!binds || isComputedPropertyName(child));
+    return {
+      node: child,
+      nested: nested || inner,
+      own: isDecorator(child) ? around : scoped,
+      around,
+    };
+  });
+}
+
+/**
+ * What has a `this` of its own: a function but an arrow, an accessor, a constructor, a class's
+ * field or its static block.
+ */
+function bindsThis(node: Node): boolean {
+  return (
+    (isAnswering(node) && !isArrowFunction(node)) ||
+    isSetAccessorDeclaration(node) ||
+    isConstructorDeclaration(node) ||
+    isPropertyDeclaration(node) ||
+    isClassStaticBlockDeclaration(node)
+  );
+}
+
+/**
+ * A node's children as they run: a class's `extends` entry and an instantiation expression, which
+ * TypeScript counts among the type nodes, by the expression they evaluate (`evaluatedEntry`).
+ */
+function evaluatedChildren(node: Node): readonly Node[] {
+  const children: Node[] = [];
+  node.forEachChild((child) => {
+    children.push(
+      isExpressionWithTypeArguments(child) && evaluatedEntry(child) ? child.expression : child,
+    );
+  });
+  return children;
+}
+
+/**
+ * Whether an entry TypeScript writes as an ExpressionWithTypeArguments runs its expression: an
+ * instantiation expression, `f<T>`, and a class's `extends` entry do; an `implements` entry and an
+ * interface's base run nothing, whichever node an AST writes them as, and stay types.
+ */
+function evaluatedEntry(entry: ExpressionWithTypeArguments): boolean {
+  const clause = entry.parent;
+  if (!isHeritageClause(clause)) return true;
+  return clause.token === SyntaxKind.ExtendsKeyword && !isInterfaceDeclaration(clause.parent);
 }
 
 /** A value the method itself returns: a return statement's, or an arrow's expression body. */

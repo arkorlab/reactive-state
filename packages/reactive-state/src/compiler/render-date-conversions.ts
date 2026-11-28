@@ -2,7 +2,6 @@ import {
   type BinaryExpression,
   type CallExpression,
   type Expression,
-  type Identifier,
   isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
@@ -21,7 +20,6 @@ import {
   SyntaxKind,
   type TaggedTemplateExpression,
   type TemplateExpression,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -40,12 +38,18 @@ import {
 } from './framed-native-evaluation.ts';
 import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedNativeRaw } from './framed-native-raw.ts';
-import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedQuietTextPrefix } from './framed-text-prefix.ts';
 import { LOCAL_TIME } from './local-date-inputs.ts';
 import { localDateProjection } from './local-date-projections.ts';
 import { localDateInvocation } from './render-date-local-invocations.ts';
+import {
+  conversionLocalSource,
+  dateCoowned,
+  unknownValue,
+  unreadArgument,
+  writesWhenEvaluated,
+} from './render-date-local-sources.ts';
 import { nativeStringConcat, STRING_CONCAT_FIELDS } from './render-date-string-concat.ts';
 import { nativeStringPadding, STRING_PADDING_FIELDS } from './render-date-string-padding.ts';
 import {
@@ -53,7 +57,6 @@ import {
   STRING_REPLACEMENT_FIELDS,
 } from './render-date-string-replacement.ts';
 import { quietNativeRawTarget, renderDateConversionSource } from './render-date-text.ts';
-import { bindingIdentifiers, hoistedIn, isBlockScoped } from './scope.ts';
 
 /** Quiet native String and finite native array text retain source-known Date text inputs. */
 
@@ -78,11 +81,25 @@ const BORROWED_FIELDS = new Set([
 ]);
 const ARRAY_JOIN = new Set([ARRAY_JOIN_PATH]);
 
+/** A borrowed native array text call: its receiver, its arguments where read, name and bind. */
 interface BorrowedArrayText {
   readonly receiver: Expression;
-  readonly given: readonly Expression[];
+  readonly given: readonly Expression[] | undefined;
   readonly name: string;
   readonly bound: CallExpression | undefined;
+}
+
+/** A native array text call read whole: `join` or `toString`, its receiver, arguments and read. */
+interface ArrayText {
+  readonly name: string;
+  readonly receiver: Expression;
+  readonly given: readonly Expression[];
+  readonly read: Expression;
+}
+
+/** A native array text call whose arguments the compile cannot read whole, as they are written. */
+interface UnreadArrayText extends Omit<ArrayText, 'given'> {
+  readonly given: readonly Expression[] | undefined;
 }
 
 /** Only the added native conversion uses the original consumer's source and earlier-work boundary. */
@@ -107,7 +124,7 @@ function concatenatedDate(call: CallExpression): boolean {
     inputs: (values) => dateInputsQuiet(values, call, STRING_CONCAT_FIELDS),
     arguments: (values) => dateStringArguments(call, values),
     date: (value) => rawDateSource(value, call),
-    quiet: (value) => quietRawSubstitution(value, call),
+    quiet: (value) => quietRawSubstitution(value, call) || unknownValue(value),
   });
 }
 
@@ -158,14 +175,17 @@ function ordinaryDateConversion(node: Node): string | undefined {
   return converts && framedQuietTextPrefix(node, DATES) ? LOCAL_TIME : undefined;
 }
 
-/** Native raw tags evaluate every substitution before any substitution becomes text. */
+/**
+ * Native raw tags evaluate every substitution before any substitution becomes text; one of a value
+ * of unknown provenance (`unknownValue`) leaves the later ones to become text.
+ */
 function rawTagDate(node: TaggedTemplateExpression): boolean {
   if (!isTemplateExpression(node.template)) return false;
   const inputs = node.template.templateSpans.map((span) => span.expression);
   if (!rawInputsQuiet(node.tag, inputs, node)) return false;
   for (const value of inputs) {
     if (rawDateSource(value, node)) return true;
-    if (!quietRawSubstitution(value, node)) return false;
+    if (!quietRawSubstitution(value, node) && !unknownValue(value)) return false;
   }
   return false;
 }
@@ -250,7 +270,11 @@ function borrowedInputsQuiet(
   );
 }
 
-/** A borrowed native array conversion keeps its original receiver, inputs and earlier-work guard. */
+/**
+ * A borrowed native array conversion keeps its original receiver and earlier-work guard; what it is
+ * given the compile cannot read, or carried across an execution owner, may be any value
+ * (`unreadArrayText`), and inputs the compile reads must evaluate quietly.
+ */
 function borrowedArrayDate(call: CallExpression): boolean {
   const selected = borrowedArrayText(call);
   if (selected === undefined) return false;
@@ -258,20 +282,24 @@ function borrowedArrayDate(call: CallExpression): boolean {
   if (
     !dateCoowned(call.expression, call) ||
     !dateCoowned(selected.receiver, call) ||
-    inputs.some((input) => !dateCoowned(input, call)) ||
-    !dateInputsQuiet(inputs, call, BORROWED_FIELDS) ||
     !framedQuietTextPrefix(call, BORROWED_FIELDS, (prior) => prior === selected.bound)
   )
     return false;
-  const prefix = framedArgumentPrefix(call, selected.given, Infinity);
-  if (prefix.unknown || prefix.alternatives !== undefined) return false;
   const read = selected.bound ?? call;
-  return (
-    (selected.name === 'join' &&
-      joinedDateSeparator(call, selected.receiver, prefix.values, read)) ||
-    (prefix.values.every((argument) => framedQuietPrimitive(argument)) &&
-      arrayDateSource(selected.receiver, read))
-  );
+  const prefix =
+    selected.given === undefined ? undefined : framedArgumentPrefix(call, selected.given, Infinity);
+  if (
+    prefix === undefined ||
+    prefix.unknown ||
+    prefix.alternatives !== undefined ||
+    inputs.some((input) => !dateCoowned(input, call))
+  ) {
+    const { name, receiver, given } = selected;
+    return unreadArrayText(call, { name, receiver, given, read });
+  }
+  if (!dateInputsQuiet(inputs, call, BORROWED_FIELDS)) return false;
+  const text = { name: selected.name, receiver: selected.receiver, given: prefix.values, read };
+  return arrayText(call, text);
 }
 
 /** Existing native borrowing and bind normalization retain the receiver outside consumed arguments. */
@@ -298,9 +326,7 @@ function borrowedArrayText(call: CallExpression): BorrowedArrayText | undefined 
     applied === undefined || nullishArrayArguments(applied)
       ? borrowed.given
       : framedAppliedArguments(call, applied);
-  return given === undefined
-    ? undefined
-    : { receiver: borrowed.receiver, given, name: borrowed.path.at(-1) ?? '', bound: undefined };
+  return { receiver: borrowed.receiver, given, name: borrowed.path.at(-1) ?? '', bound: undefined };
 }
 
 /** Function.apply accepts an omitted or native nullish list; Reflect.apply requires an object list. */
@@ -312,7 +338,11 @@ function nullishArrayArguments(expression: Expression): boolean {
   );
 }
 
-/** Both addition operands evaluate before coercion; only a quiet primitive accompanies the array. */
+/**
+ * Both addition operands evaluate before coercion; a quiet primitive, or a value of unknown
+ * provenance (`unknownValue`), which may be any value, accompanies the array, whose elements become
+ * text.
+ */
 function additionArrayDate(node: BinaryExpression): boolean {
   const operation = node.operatorToken.kind;
   if (operation !== SyntaxKind.PlusToken && operation !== SyntaxKind.PlusEqualsToken) return false;
@@ -322,47 +352,14 @@ function additionArrayDate(node: BinaryExpression): boolean {
   if (left === undefined) return false;
   const right = conversionLocalSource(node.right, node) ?? node.right;
   return (
-    (framedQuietPrimitive(left) && dateCoowned(right, node) && arrayDateSource(right, node)) ||
-    (framedQuietPrimitive(right) && dateCoowned(left, node) && arrayDateSource(left, node))
+    (accompanying(left) && dateCoowned(right, node) && arrayDateSource(right, node)) ||
+    (accompanying(right) && dateCoowned(left, node) && arrayDateSource(left, node))
   );
 }
 
-/** A whole local mutable operand retains its earlier possible initializer under the existing prefix proof. */
-function conversionLocalSource(
-  expression: Expression,
-  consumer: Expression,
-): Expression | undefined {
-  const target = unwrapped(expression);
-  if (!isIdentifier(target)) return undefined;
-  const selected = frameBindingOf(target);
-  if (selected === undefined || selected.keys.length > 0) return undefined;
-  const { binding } = selected;
-  if (
-    !isVariableDeclaration(binding) ||
-    !isIdentifier(binding.name) ||
-    !isVariableDeclarationList(binding.parent) ||
-    binding.initializer === undefined ||
-    binding.end >= consumer.pos ||
-    !framedPrefixSameOwner(binding, consumer) ||
-    !/^(?:let|var)\b/u.test(binding.parent.getText(binding.getSourceFile()))
-  )
-    return undefined;
-  return isBlockScoped(binding.parent) || singleAssignmentVar(binding, consumer)
-    ? binding.initializer
-    : undefined;
-}
-
-/** Only this native Date text owner opts into guarded local array initializer ownership. */
-function dateCoowned(value: Expression, consumer: Expression): boolean {
-  return framedOriginCoowned(value, consumer, localArrayInitializer);
-}
-
-/** The original initializer is rechecked by the existing ownership walk, including const aliases. */
-function localArrayInitializer(name: Identifier, consumer: Expression): Expression | undefined {
-  const read = name.pos < consumer.pos ? name : consumer;
-  const source = conversionLocalSource(name, read);
-  const array = source === undefined ? undefined : framedQuietSource(source);
-  return array !== undefined && isArrayLiteralExpression(array) ? source : undefined;
+/** Whether a value beside a converted array leaves its elements to become text (`unknownValue`). */
+function accompanying(value: Expression): boolean {
+  return framedQuietPrimitive(value) || unknownValue(value);
 }
 
 /** Selected mutable array data keeps the same owner and original conversion read point. */
@@ -420,44 +417,49 @@ function dateInputsQuiet(
   return true;
 }
 
-/** Another hoisted declaration of a var may replace its value without an assignment expression. */
-function singleAssignmentVar(binding: VariableDeclaration, consumer: Expression): boolean {
-  if (!isIdentifier(binding.name)) return false;
-  const name = binding.name.text;
-  let region: Node = binding;
-  while (framedPrefixSameOwner(region.parent, consumer)) region = region.parent;
-  return hoistedIn([region]).every(
-    (other) =>
-      other === binding || bindingIdentifiers(other.name).every((bound) => bound.text !== name),
-  );
-}
-
-/** Untagged substitutions become text in order; unknown earlier conversion retains opacity. */
+/**
+ * Untagged substitutions become text in order; an earlier conversion the code writes and the
+ * compile cannot prove quiet retains opacity, but one of a value of unknown provenance
+ * (`unknownValue`), which may be any value, leaves the later substitutions to become text.
+ */
 function templateArrayDate(node: TemplateExpression): boolean {
   if (isTaggedTemplateExpression(node.parent)) return false;
   for (const span of node.templateSpans) {
     if (dateCoowned(span.expression, node) && arrayDateSource(span.expression, node)) return true;
-    if (!framedQuietPrimitive(span.expression)) return false;
+    if (!framedQuietPrimitive(span.expression) && !unknownValue(span.expression)) return false;
   }
   return false;
 }
 
-/** Every original String argument evaluates before its selected first input becomes text. */
+/**
+ * Every original String argument evaluates before its selected first input becomes text. String
+ * reads none after it, so a first argument written there decides whatever follows it, but for one
+ * whose evaluation writes as the code shows (`writesWhenEvaluated`), which may rewrite the first;
+ * one a spread gives decides where the compile reads the spread whole and quietly.
+ */
 function stringDate(node: CallExpression | NewExpression): boolean {
   if (!framedNativeConstructor(node.expression, STRINGS) || !dateCoowned(node.expression, node))
     return false;
   const given = node.arguments ?? [];
+  const [written] = given;
+  if (written !== undefined && !isSpreadElement(written))
+    return (
+      given.slice(1).every((value) => !writesWhenEvaluated(value)) && stringDateInput(written, node)
+    );
   const values = dateStringArguments(node, given);
-  if (values === undefined) return false;
   if (
-    given.some((value) => isSpreadElement(value)) &&
-    (given.some((value) => !dateCoowned(value, node)) || !dateInputsQuiet(given, node, DATES))
+    values === undefined ||
+    given.some((value) => !dateCoowned(value, node)) ||
+    !dateInputsQuiet(given, node, DATES)
   )
     return false;
-  const [first, ...remaining] = values;
+  const [first] = values;
+  return first !== undefined && stringDateInput(first, node);
+}
+
+/** Whether String's first input is Date text: a whole Date, or a finite native array of Dates. */
+function stringDateInput(first: Expression, node: CallExpression | NewExpression): boolean {
   return (
-    first !== undefined &&
-    remaining.every((argument) => framedQuietPrimitive(argument)) &&
     dateCoowned(first, node) &&
     (renderDateConversionSource(first, node) || arrayDateSource(first, node))
   );
@@ -483,25 +485,65 @@ function dateStringArguments(
   return values;
 }
 
-/** Native join and toString retain Date text only before own method, element or iterator exposure. */
+/**
+ * Native join and toString retain Date text only before own method, element or iterator exposure.
+ * A spread the compile cannot read, or one carried across an execution owner, gives what may be any
+ * value (`unreadArrayText`); a spread it reads must evaluate quietly.
+ */
 function joinedDate(node: CallExpression, read: Expression = node): boolean {
   const method = node.expression;
   if (!isPropertyAccessExpression(method) && !isElementAccessExpression(method)) return false;
   const name = frameMemberName(method) ?? '';
   if (!ARRAY_TEXT.has(name) || !dateCoowned(method.expression, read)) return false;
   const given = dateStringArguments(node, node.arguments);
-  if (
-    given === undefined ||
-    (node.arguments.some((argument) => isSpreadElement(argument)) &&
-      (node.arguments.some((argument) => !dateCoowned(argument, read)) ||
-        !dateInputsQuiet(node.arguments, read, DATES)))
-  )
-    return false;
-  return (
-    (name === 'join' && joinedDateSeparator(node, method.expression, given, read)) ||
-    (given.every((argument) => framedQuietPrimitive(argument)) &&
-      arrayDateSource(method.expression, read))
-  );
+  const spread = node.arguments.some((argument) => isSpreadElement(argument));
+  if (given === undefined || (spread && node.arguments.some((value) => !dateCoowned(value, read))))
+    return unreadArrayText(node, {
+      name,
+      receiver: method.expression,
+      given: node.arguments,
+      read,
+    });
+  if (spread && !dateInputsQuiet(node.arguments, read, DATES)) return false;
+  return arrayText(node, { name, receiver: method.expression, given, read });
+}
+
+/**
+ * Whether a native array text call the compile reads the arguments of renders Date text. The
+ * elements render whatever the arguments are, so their Date text is read first, and no argument
+ * takes it away — but one whose evaluation writes, as the code shows (`writesWhenEvaluated`), may
+ * rewrite them first: `toString` reads no argument, and a join's separator at most adds Date text —
+ * one the compile cannot read (`unreadArgument`) may be any value, a Date among them, and one that
+ * is a Date's text renders it (`joinedDateSeparator`).
+ */
+function arrayText(node: CallExpression, text: ArrayText): boolean {
+  const { name, receiver, given, read } = text;
+  if (given.every((value) => !writesWhenEvaluated(value)) && arrayDateSource(receiver, read))
+    return true;
+  const [separator] = given;
+  if (name !== 'join' || separator === undefined) return false;
+  if (unreadArgument(separator, read)) return nativeArray(receiver, read);
+  return joinedDateSeparator(node, receiver, given, read);
+}
+
+/**
+ * What a native array text call renders where the compile cannot read all it is given: `toString`
+ * reads no argument, and the elements decide; a join reads its first argument alone, so a separator
+ * written before any spread is read as written (`arrayText`), and one a spread the compile cannot
+ * read may give may be any value, a Date among them, which the native join of an array converts.
+ */
+function unreadArrayText(node: CallExpression, text: UnreadArrayText): boolean {
+  const { name, receiver, given, read } = text;
+  const [first] = given ?? [];
+  if (name !== 'join' || (given !== undefined && (first === undefined || !isSpreadElement(first))))
+    return arrayText(node, { name, receiver, given: first === undefined ? [] : [first], read });
+  return nativeArray(receiver, read);
+}
+
+/** Whether a receiver is a native finite array, whose native join converts its separator first. */
+function nativeArray(receiver: Expression, read: Expression): boolean {
+  const source = dateSource(receiver, read);
+  return source !== undefined && isArrayLiteralExpression(source);
 }
 
 /** A native join separator becomes text before any elements, including empty or single arrays. */

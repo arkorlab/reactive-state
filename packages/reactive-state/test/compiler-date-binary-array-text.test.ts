@@ -87,6 +87,21 @@ const CASES = [
     input: null,
     private: false,
   },
+  // An operand the compile cannot read may be any value; the array's elements still become text.
+  {
+    id: 'unread-operand-Date-array',
+    source:
+      'export function Widget(props:{label?:string}){return <p>{(props.label as string)+[new Date(0)]}</p>;}',
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unread-operand-scalar-array-data',
+    source:
+      "export function Widget(props:{label?:string}){return <p>{(props.label as string)+['x']}</p>;}",
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('date binary array conversion readers', () => {

@@ -5,6 +5,7 @@ import {
   isElementAccessExpression,
   isNewExpression,
   isPropertyAccessExpression,
+  isSpreadElement,
   type Node,
 } from 'typescript/ast';
 
@@ -47,6 +48,23 @@ export function framedNativeArguments(
       constructed: isNewExpression(node),
     };
   return isCallExpression(node) ? indirectArguments(node, names, exempting) : undefined;
+}
+
+/**
+ * A native method borrowed through `call` past a written receiver, of arguments the compile cannot
+ * resolve, `Map.prototype.set.call(values, ...pair)`: its receiver, and what follows it.
+ */
+export function framedUnresolvedCall(
+  call: CallExpression,
+  names: ReadonlySet<string>,
+): { readonly receiver: Expression; readonly args: readonly Expression[] } | undefined {
+  const callee = unwrapped(call.expression);
+  const [receiver, ...args] = call.arguments;
+  if (receiver === undefined || isSpreadElement(receiver)) return undefined;
+  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return undefined;
+  return frameMemberName(callee) === 'call' && framedNativeConstructor(callee.expression, names)
+    ? { receiver, args }
+    : undefined;
 }
 
 /** A resolved wrapper prefix fixes the target, ignored receiver and native argument list positions. */

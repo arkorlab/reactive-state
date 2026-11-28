@@ -178,6 +178,43 @@ const CASES = [
     input: null,
     private: false,
   },
+  // String reads its first argument alone; those after it the compile cannot read leave it to decide.
+  {
+    id: 'String-unread-tail',
+    source:
+      'export function Widget(){const render=(extra:readonly never[])=>String([new Date(0)],...extra);return <p>{render([])}</p>;}',
+    input: true,
+    private: true,
+  },
+  {
+    id: 'String-unread-tail-data',
+    source:
+      "export function Widget(){const render=(extra:readonly never[])=>String(['x'],...extra);return <p>{render([])}</p>;}",
+    input: false,
+    private: false,
+  },
+  // An argument toString or String ignores takes no Date text away from what they convert.
+  {
+    id: 'toString-coowned-call-argument',
+    source:
+      "export function Widget(){const sep=()=>'-';return <p>{[new Date(0)].toString(sep() as never)}</p>;}",
+    input: true,
+    private: true,
+  },
+  {
+    id: 'String-coowned-call-tail',
+    source:
+      "export function Widget(){const sep=()=>'-';return <p>{String([new Date(0)],sep() as never)}</p>;}",
+    input: true,
+    private: true,
+  },
+  {
+    id: 'String-coowned-call-tail-data',
+    source:
+      "export function Widget(){const sep=()=>'-';return <p>{String(['x'],sep() as never)}</p>;}",
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('date array stringification readers', () => {

@@ -190,6 +190,94 @@ const CASES = [
     input: true,
     private: true,
   },
+  // A separator the compile cannot read may be any value, a Date among them; the elements render
+  // whatever it is. A written separator, or a spread read whole and quietly, renders no Date text.
+  {
+    id: 'parameter-spread-separator',
+    source: `export function Widget(){const render=(sep:readonly string[])=>[new Date(0)].join(...sep);return <p>{render(['-'])}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'exposed-constant-spread-separator',
+    source: `export const SEP:string[]=['-'];export function Widget(){return <p>{[new Date(0)].join(...SEP)}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'parameter-separator',
+    source: `export function Widget(props:{sep?:string}){return <p>{[new Date(0)].join(props.sep)}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'parameter-date-separator',
+    source: `export function Widget(){const render=(sep:unknown)=>['x','y'].join(sep as string);return <p>{render(new Date(0))}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'parameter-spread-toString',
+    source: `export function Widget(){const render=(extra:readonly never[])=>[new Date(0)].toString(...extra);return <p>{render([])}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'borrowed-parameter-spread',
+    source: `export function Widget(){const render=(sep:readonly string[])=>Array.prototype.join.call([new Date(0)],...sep);return <p>{render(['-'])}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'parameter-element-written-separator',
+    source: `export function Widget(props:{label?:string}){return <p>{[props.label].join('-')}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
+  {
+    id: 'parameter-element-spread-toString',
+    source: `export function Widget(){const render=(label:string,extra:readonly never[])=>[label].toString(...extra);return <p>{render('x',[])}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
+  {
+    id: 'local-scalar-spread-separator',
+    source: `export function Widget(){const sep=['-'] as const;return <p>{['x','y'].join(...sep)}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
+  // A join reads its first argument alone: a separator written before a spread the compile cannot
+  // read is read as written; one such a spread may give may be any value.
+  {
+    id: 'written-separator-unread-tail',
+    source: `export function Widget(){const render=(extra:readonly string[])=>['x','y'].join('-',...extra);return <p>{render([])}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
+  {
+    id: 'borrowed-written-separator-unread-tail',
+    source: `export function Widget(){const render=(extra:readonly string[])=>Array.prototype.join.call(['x','y'],'-',...extra);return <p>{render([])}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
+  {
+    id: 'unread-spread-before-separator',
+    source: `export function Widget(){const render=(extra:readonly string[])=>['x','y'].join(...extra,'-');return <p>{render([])}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
 ] as const;
 
 describe('native Date join spread owner boundaries', () => {
