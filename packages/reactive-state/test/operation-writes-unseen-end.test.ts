@@ -1,5 +1,6 @@
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
+import { sql as raw } from 'drizzle-orm';
 import { pgTable, text } from 'drizzle-orm/pg-core';
 import { Client, Pool } from 'pg';
 import { describe, expect, it, onTestFinished } from 'vitest';
@@ -7,7 +8,7 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 import type { OperationCall } from '../src/program.ts';
 import { endsTransaction } from '../src/sql/client-writes.ts';
 import { followDrizzle } from '../src/sql/index.ts';
-import { engineOf } from './support/drizzle.ts';
+import { engineOf, openedWith } from './support/drizzle.ts';
 
 /**
  * The writes of a transaction a server operation opened on a connection it checked out, whose end
@@ -208,6 +209,175 @@ describe('an operation whose transaction ended in a form the pool’s client doe
 
       expect(answer).toMatchObject({ code: 'OPERATION_REJECTED', status: 422 });
       await expect(heldIds(setup.pg)).resolves.toStrictEqual(['t1']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+/** The ids of the tasks a PGlite holds, in order. */
+async function heldByPglite(pg: PGlite): Promise<readonly unknown[]> {
+  const { rows } = await pg.query<{ id: unknown }>('SELECT id FROM tasks ORDER BY id');
+  return rows.map((row) => row.id);
+}
+
+describe('an operation whose PGlite transaction was ended by a text of the code’s own', () => {
+  it.each([
+    ['COMMIT'],
+    ['END'],
+    ['commit;'],
+    ['COMMIT AND CHAIN'],
+    ['COMMIT WORK'],
+    ['END TRANSACTION'],
+  ])(
+    'answers a failure, not a refusal, when `%s` ends it and the callback throws',
+    async (ending) => {
+      const setup = await openedWith(schema, DDL);
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            ended: async (): Promise<void> => {
+              await setup.orm.transaction(async (tx) => {
+                await tx.insert(tasks).values({ id: 't2', title: 'Kept' });
+                await tx.execute(raw.raw(ending));
+                throw new Error('after the end');
+              });
+            },
+          },
+        },
+        {},
+      );
+      const call = callOf('ended');
+
+      const first = await rejection(engine.operate(session, call));
+      const again = await rejection(engine.operate(session, call));
+
+      expect(first).toMatchObject({ code: 'OPERATION_FAILED' });
+      expect(again).toMatchObject({ code: 'OPERATION_FAILED' });
+      await expect(heldByPglite(setup.pg)).resolves.toStrictEqual(['t1', 't2']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'answers a failure, not a refusal, when `rollback()` follows what a `COMMIT` of its own wrote',
+    async () => {
+      const setup = await openedWith(schema, DDL);
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            rolled: async (): Promise<void> => {
+              await setup.orm.transaction(async (tx) => {
+                await tx.insert(tasks).values({ id: 't2', title: 'Kept' });
+                await tx.execute(raw`COMMIT`);
+                tx.rollback();
+              });
+            },
+          },
+        },
+        {},
+      );
+
+      const answer = await rejection(engine.operate(session, callOf('rolled')));
+
+      expect(answer).toMatchObject({ code: 'OPERATION_FAILED' });
+      await expect(heldByPglite(setup.pg)).resolves.toStrictEqual(['t1', 't2']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'answers the refusal of a transaction a text of its own rolled back, and the code threw after',
+    async () => {
+      const setup = await openedWith(schema, DDL);
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            undone: async (): Promise<void> => {
+              await setup.orm.transaction(async (tx) => {
+                await tx.insert(tasks).values({ id: 't2', title: 'Undone' });
+                await tx.execute(raw`ROLLBACK`);
+                throw new Error('after the rollback');
+              });
+            },
+          },
+        },
+        {},
+      );
+
+      const answer = await rejection(engine.operate(session, callOf('undone')));
+
+      expect(answer).toMatchObject({ code: 'OPERATION_REJECTED', status: 422 });
+      await expect(heldByPglite(setup.pg)).resolves.toStrictEqual(['t1']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'answers a failure when a savepoint was rolled back inside what the transaction then committed',
+    async () => {
+      const setup = await openedWith(schema, DDL);
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            nested: async (): Promise<void> => {
+              await setup.orm.transaction(async (tx) => {
+                await tx.insert(tasks).values({ id: 't2', title: 'Kept' });
+                try {
+                  await tx.transaction(async (inner) => {
+                    await inner.insert(tasks).values({ id: 't3', title: 'Undone' });
+                    throw new Error('no room');
+                  });
+                } catch {
+                  // Rolled back to the savepoint alone: `t2` goes on to commit.
+                }
+              });
+              throw new Error('after the commit');
+            },
+          },
+        },
+        {},
+      );
+
+      const answer = await rejection(engine.operate(session, callOf('nested')));
+
+      expect(answer).toMatchObject({ code: 'OPERATION_FAILED' });
+      await expect(heldByPglite(setup.pg)).resolves.toStrictEqual(['t1', 't2']);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'answers the refusal of a transaction the callback’s throw rolled back, as before',
+    async () => {
+      const setup = await openedWith(schema, DDL);
+      const { engine, session } = await engineOf(
+        setup,
+        (_props, $) => $.h('p', null, 'shown'),
+        {
+          [MODULE]: {
+            thrown: async (): Promise<void> => {
+              await setup.orm.transaction(async (tx) => {
+                await tx.insert(tasks).values({ id: 't2', title: 'Undone' });
+                throw new Error('no room');
+              });
+            },
+          },
+        },
+        {},
+      );
+
+      const answer = await rejection(engine.operate(session, callOf('thrown')));
+
+      expect(answer).toMatchObject({ code: 'OPERATION_REJECTED', status: 422 });
+      await expect(heldByPglite(setup.pg)).resolves.toStrictEqual(['t1']);
     },
     TEST_TIMEOUT_MS,
   );

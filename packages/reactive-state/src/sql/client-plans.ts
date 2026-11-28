@@ -1,7 +1,13 @@
 import { type TableRead } from '../server/context.ts';
 import { type Relation, relationKey } from './capture.ts';
 import { type Catalog, catalogOf, catalogSql, NO_CONDITIONS } from './catalog.ts';
-import { changesContext, changesSession, leavesSession, namesTemporaryRowType } from './guards.ts';
+import {
+  changesContext,
+  changesSession,
+  leavesSession,
+  namesTemporaryRowType,
+  scopedAfter,
+} from './guards.ts';
 import type { Followed } from './keys.ts';
 import { explainSql, type PlanReads, planReads, type Scan } from './plans.ts';
 import { readsOf, type TableScan } from './reads.ts';
@@ -292,6 +298,11 @@ export class Plans {
   /** Whether a text run on a checked-out connection changes its settings beyond a transaction. */
   leavesSession(sql: string): boolean {
     return leavesSession(sql, this.#catalog?.conforming === true);
+  }
+
+  /** Whether a checked-out connection holds a setting of its transaction's after `sql`, as `before` it. */
+  scopedAfter(sql: string, before: boolean): boolean {
+    return scopedAfter(sql, this.#catalog?.conforming === true, before);
   }
 
   /**
